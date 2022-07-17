@@ -1,0 +1,13 @@
+[package]
+name = "rinject"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+members = ["injector"]
+
+[dependencies]
+slint = "0.2.5"
+
+[build-dependencies]
+slint-build = "0.2.5"

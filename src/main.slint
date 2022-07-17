@@ -1,0 +1,116 @@
+import { ScrollView, Button, CheckBox, SpinBox, Slider, GroupBox, LineEdit, StandardListView,
+    ComboBox, HorizontalBox, VerticalBox, GridBox, TabWidget, TextEdit, AboutSlint, ListView } from "std-widgets.slint";
+
+MainWindow := Window {
+	min-width: 400px;
+    max-width: 400px;
+    preferred-height: 800px;
+    title: "rinject";
+
+	// Callbacks to rust
+	callback refresh-proc-list() -> [StandardListViewItem];
+	callback inject(StandardListViewItem);
+	inject(item) => { log(item.text) }  // TODO actual impl
+	callback file-prompt() -> string;
+    callback modify-lib-list(string, string);  // Slint language doesn't support array manipulation
+    callback quit();  // Slint seriously doesn't this built in??
+
+	// Callbacks from rust
+    callback log(string);
+    log(str) => { LogView.text += str }
+
+//    property<[StandardListViewItem]> proc-list <=> ProcListView.model;
+//    property<int> proc-selected-index <=> ProcListView.current-item;
+    property<bool> filter-owner <=> FilterOwner.checked;
+    property<bool> wine-mode <=> WineMode.checked;
+    property<bool> wine-mode-available <=> WineMode.visible;
+    property<[StandardListViewItem]> lib-list <=> LibListView.model;
+
+
+    VerticalBox {
+        HorizontalBox {
+	        alignment: center;
+	        vertical-stretch: 0;
+            Text {
+				vertical-stretch: 0;
+                text: root.title;
+                font-size: 30px;
+                max-height: 0px;
+            }
+        }
+
+		GroupBox {
+			title: "Process";
+			VerticalBox {
+				HorizontalBox {
+					ProcListView := StandardListView {
+						vertical-stretch: 1;
+						min-height: 200px;
+						model: [ { text: "Process list loading"} ];
+					}
+					Button {
+						width: 35px;
+						text: "↻";
+						clicked => { ProcListView.model = refresh-proc-list() }
+					}
+				}
+				HorizontalBox {
+					alignment: center;
+					FilterOwner := CheckBox {
+						text: "Owner Only";
+					}
+					WineMode := CheckBox {
+						text: "Wine";
+						visible: false;
+					}
+				}
+			}
+		}
+
+		GroupBox {
+			title: "Target Library";
+			VerticalBox {
+				HorizontalBox {
+					LibListView := StandardListView {
+						vertical-stretch: 0.3;
+						min-height: 30px;
+					}
+					VerticalBox {
+						width: 50px;
+						Button {
+							text: "+";
+							clicked => { modify-lib-list("add", file-prompt()) }
+						}
+						Button {
+							text: "🠑";
+							clicked => { modify-lib-list("moveup", "") }
+						}
+						Button {
+							text: "-";
+							clicked => { modify-lib-list("remove", "") }
+						}
+					}
+				}
+			}
+		}
+		// TODO maybe add auth prompt to elevate priveleges
+		HorizontalBox {
+			QuitCheck := CheckBox {
+				text: "Quit on finish";
+			}
+			Button {
+				text: "Inject";
+				clicked => { inject(ProcListView.model[ProcListView.current-item]); if (QuitCheck.checked) { root.quit() }  }
+			}
+		}
+		GroupBox {
+			title: "Log";
+			LogView := TextEdit {
+				min-height: 100px;
+				read-only: true;
+				max-height: 100px;  // For some reason this element hogs all the stretch
+//				vertical-stretch: 0.1;
+			}
+		}
+    }
+}
