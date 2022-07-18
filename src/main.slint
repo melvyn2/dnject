@@ -10,13 +10,14 @@ MainWindow := Window {
 	// Callbacks to rust
 	callback refresh-proc-list() -> [StandardListViewItem];
 	callback inject(StandardListViewItem, [StandardListViewItem]);
-	callback file-prompt() -> string;
-    callback modify-lib-list(string, string);  // Slint language doesn't support array manipulation
+	// Slint doesn't have array manipulation built in
+    callback add-library([StandardListViewItem]) -> [StandardListViewItem];
+    callback mod-library-list([StandardListViewItem], int, bool) -> [StandardListViewItem];
     callback quit();  // Slint seriously doesn't this built in??
 
 	// Callbacks from rust
     callback log(string);
-    log(str) => { LogView.text += str }
+    log(str) => { LogView.text = str + LogView.text }
 
 //    property<[StandardListViewItem]> proc-list <=> ProcListView.model;
 //    property<int> proc-selected-index <=> ProcListView.current-item;
@@ -78,15 +79,30 @@ MainWindow := Window {
 						width: 50px;
 						Button {
 							text: "+";
-							clicked => { modify-lib-list("add", file-prompt()) }
+							clicked => {
+								LibListView.model = add-library(LibListView.model);
+								LibListView.current-item = 0;
+							}
 						}
 						Button {
 							text: "🠑";
-							clicked => { modify-lib-list("moveup", "") }
+							clicked => {
+								if (LibListView.current-item > 0) {
+									LibListView.model = mod-library-list(LibListView.model, LibListView.current-item, true);
+									LibListView.current-item -= 1;
+								}
+							}
 						}
 						Button {
 							text: "-";
-							clicked => { modify-lib-list("remove", "") }
+							clicked => {
+								if (LibListView.current-item >= 0) {
+									LibListView.model = mod-library-list(LibListView.model, LibListView.current-item, false);
+									if (LibListView.current-item > 0) {
+										LibListView.current-item -= 1;
+									}
+								}
+							}
 						}
 					}
 				}

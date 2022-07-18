@@ -30,54 +30,34 @@ impl log::Log for SlintTextLogger {
     fn flush(&self) {}
 }
 
-fn inject(target: StandardListViewItem, libs: ModelRc<StandardListViewItem>) {
-    error!("stub inject() called");
-}
-
 fn file_prompt() -> SharedString {
     error!("stub file_prompt() called");
     SharedString::from(chrono::Local::now().format("%S").to_string())
 }
 
-fn modify_lib_list(handle: Weak<MainWindow>, op: SharedString, item: SharedString) {
-    let handle = handle.unwrap();
-    let mut idx = handle.get_lib_selected_index();
-    let newlist: VecModel<StandardListViewItem> = VecModel::from(
-        handle
-            .get_lib_list()
-            .iter()
-            .collect::<Vec<StandardListViewItem>>(),
-    );
-    match op.as_str() {
-        "add" => {
-            newlist.insert(0, StandardListViewItem::from(item));
-            handle.set_lib_selected_index(0);
-        }
-        "moveup" => {
-            if idx <= 0 {
-                return;
-            }
-            let item = newlist.row_data(idx as usize).unwrap();
-            newlist.remove(idx as usize);
-            idx -= 1;
-            newlist.insert(idx as usize, item);
-        }
-        "remove" => {
-            if idx < 0 {
-                return;
-            }
-            newlist.remove(idx as usize);
-            if idx > 0 {
-                idx -= 1;
-            }
-        }
-        other => {
-            error!("Unknown operation '{}' passed to modify_lib_list()", other);
-            return;
-        }
+fn add_library(list: ModelRc<StandardListViewItem>) -> ModelRc<StandardListViewItem> {
+    let newlist = VecModel::from(list.iter().collect::<Vec<StandardListViewItem>>());
+    newlist.insert(0, StandardListViewItem::from(file_prompt()));
+    ModelRc::new(newlist)
+}
+
+fn mod_library_list(
+    list: ModelRc<StandardListViewItem>,
+    idx: i32,
+    moveup: bool,
+) -> ModelRc<StandardListViewItem> {
+    let newlist = VecModel::from(list.iter().collect::<Vec<StandardListViewItem>>());
+    let item = newlist.row_data(idx as usize).unwrap();
+    // Our ui callback does bounds checking already
+    newlist.remove(idx as usize);
+    if moveup {
+        newlist.insert((idx - 1) as usize, item);
     }
-    handle.set_lib_list(ModelRc::new(newlist));
-    handle.set_lib_selected_index(idx);
+    ModelRc::new(newlist)
+}
+
+fn inject(target: StandardListViewItem, libs: ModelRc<StandardListViewItem>) {
+    error!("stub inject() called");
 }
 
 fn main() {
@@ -90,11 +70,10 @@ fn main() {
         .expect("Unable to init logger");
     trace!("Logger init done");
 
-    let weak_handle = main.as_weak();
     main.on_quit(slint::quit_event_loop);
     main.on_inject(inject);
-    main.on_modify_lib_list(move |op, item| modify_lib_list(weak_handle.clone(), op, item));
-    main.on_file_prompt(file_prompt);
+    main.on_add_library(add_library);
+    main.on_mod_library_list(mod_library_list);
     trace!("Callback bindings finished");
 
     info!("Starting event loop");
