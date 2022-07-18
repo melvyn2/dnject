@@ -8,6 +8,8 @@ members = ["injector"]
 
 [dependencies]
 slint = "0.2.5"
+log = { version = "0.4.17", features = ["std"] }
+chrono = "0.4.19"
 
 [build-dependencies]
 slint-build = "0.2.5"

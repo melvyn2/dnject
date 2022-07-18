@@ -2,15 +2,14 @@ import { ScrollView, Button, CheckBox, SpinBox, Slider, GroupBox, LineEdit, Stan
     ComboBox, HorizontalBox, VerticalBox, GridBox, TabWidget, TextEdit, AboutSlint, ListView } from "std-widgets.slint";
 
 MainWindow := Window {
-	min-width: 400px;
-    max-width: 400px;
-    preferred-height: 800px;
+	min-width: 450px;
+    max-width: 450px;
+    preferred-height: 900px;
     title: "rinject";
 
 	// Callbacks to rust
 	callback refresh-proc-list() -> [StandardListViewItem];
-	callback inject(StandardListViewItem);
-	inject(item) => { log(item.text) }  // TODO actual impl
+	callback inject(StandardListViewItem, [StandardListViewItem]);
 	callback file-prompt() -> string;
     callback modify-lib-list(string, string);  // Slint language doesn't support array manipulation
     callback quit();  // Slint seriously doesn't this built in??
@@ -25,7 +24,7 @@ MainWindow := Window {
     property<bool> wine-mode <=> WineMode.checked;
     property<bool> wine-mode-available <=> WineMode.visible;
     property<[StandardListViewItem]> lib-list <=> LibListView.model;
-
+    property<int> lib-selected-index <=> LibListView.current-item;
 
     VerticalBox {
         HorizontalBox {
@@ -93,14 +92,17 @@ MainWindow := Window {
 				}
 			}
 		}
-		// TODO maybe add auth prompt to elevate priveleges
+		// TODO maybe add auth prompt to elevate privileges
 		HorizontalBox {
 			QuitCheck := CheckBox {
 				text: "Quit on finish";
 			}
 			Button {
 				text: "Inject";
-				clicked => { inject(ProcListView.model[ProcListView.current-item]); if (QuitCheck.checked) { root.quit() }  }
+				clicked => {
+					inject(ProcListView.model[ProcListView.current-item], LibListView.model);
+					if (QuitCheck.checked) { root.quit() }
+				}
 			}
 		}
 		GroupBox {
