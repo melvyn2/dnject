@@ -1,5 +1,4 @@
-import { ScrollView, Button, CheckBox, SpinBox, Slider, GroupBox, LineEdit, StandardListView,
-    ComboBox, HorizontalBox, VerticalBox, GridBox, TabWidget, TextEdit, AboutSlint, ListView } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, GroupBox, HorizontalBox, VerticalBox, StandardListView, TextEdit } from "std-widgets.slint";
 
 MainWindow := Window {
 	min-width: 450px;
@@ -8,7 +7,7 @@ MainWindow := Window {
     title: "rinject";
 
 	// Callbacks to rust
-	callback refresh-proc-list() -> [StandardListViewItem];
+	callback fetch-proc-list(string) -> [StandardListViewItem];
 	callback inject(StandardListViewItem, [StandardListViewItem]);
 	// Slint doesn't have array manipulation built in
     callback add-library([StandardListViewItem]) -> [StandardListViewItem];
@@ -18,14 +17,13 @@ MainWindow := Window {
 	// Callbacks from rust
     callback log(string);
     log(str) => { LogView.text = str + LogView.text }
+    callback refresh-proc-list();
+    refresh-proc-list() => { RefreshButton.clicked() }
 
-//    property<[StandardListViewItem]> proc-list <=> ProcListView.model;
-//    property<int> proc-selected-index <=> ProcListView.current-item;
-    property<bool> filter-owner <=> FilterOwner.checked;
-    property<bool> wine-mode <=> WineMode.checked;
-    property<bool> wine-mode-available <=> WineMode.visible;
-    property<[StandardListViewItem]> lib-list <=> LibListView.model;
-    property<int> lib-selected-index <=> LibListView.current-item;
+	// These are only needed because slint doesn't support conditional compilation
+	// So rust has to populate the combobox options at init itself
+    property<[string]> proc-modes <=> ModeSelector.model;
+    property<string> proc-sel <=> ModeSelector.current-value;
 
     VerticalBox {
         HorizontalBox {
@@ -46,24 +44,28 @@ MainWindow := Window {
 					ProcListView := StandardListView {
 						vertical-stretch: 1;
 						min-height: 200px;
-						model: [ { text: "Process list loading"} ];
 					}
-					Button {
+					RefreshButton := Button {
 						width: 35px;
 						text: "↻";
-						clicked => { ProcListView.model = refresh-proc-list() }
+						clicked => { ProcListView.model = fetch-proc-list(ModeSelector.current-value) }
 					}
 				}
-				HorizontalBox {
-					alignment: center;
-					FilterOwner := CheckBox {
-						text: "Owner Only";
-					}
-					WineMode := CheckBox {
-						text: "Wine";
-						visible: false;
-					}
+				// TODO Radio buttons would be a better fit, but slint doesn't have those
+				ModeSelector := ComboBox {
+					max-height: 0px;
+					selected(mode) => { ProcListView.model = fetch-proc-list(mode) }
 				}
+//				HorizontalBox {
+//					alignment: center;
+//					FilterOwner := CheckBox {
+//						text: "Owner Only";
+//					}
+//					WineMode := CheckBox {
+//						text: "Wine";
+//						visible: false;
+//					}
+//				}
 			}
 		}
 
@@ -75,8 +77,8 @@ MainWindow := Window {
 						vertical-stretch: 0.3;
 						min-height: 30px;
 					}
-					VerticalBox {
-						width: 50px;
+					VerticalLayout {
+						width: 35px;
 						Button {
 							text: "+";
 							clicked => {
@@ -108,13 +110,20 @@ MainWindow := Window {
 				}
 			}
 		}
-		// TODO maybe add auth prompt to elevate privileges
+		// TODO Good place for a progress bar which slint doesn't have
+
+		// TODO Add button to elevate privileges
+		// On linux, this would mean giving CAP_SYS_PTRACE to attach and r/w mem,
+		// And CAP_DAC_READ_SEARCH to read from the target /proc file (or CAP_DAC_OVERRIDE to write too)
+		// https://docs.rs/caps/latest/caps/
+		// https://man7.org/linux/man-pages/man7/capabilities.7.html
 		HorizontalBox {
 			QuitCheck := CheckBox {
 				text: "Quit on finish";
 			}
 			Button {
 				text: "Inject";
+				enabled: ProcListView.current-item >= 0 && LibListView.model.length > 0;
 				clicked => {
 					inject(ProcListView.model[ProcListView.current-item], LibListView.model);
 					if (QuitCheck.checked) { root.quit() }
@@ -126,7 +135,7 @@ MainWindow := Window {
 			LogView := TextEdit {
 				min-height: 100px;
 				read-only: true;
-				max-height: 100px;  // For some reason this element hogs all the stretch
+				max-height: 150px;  // For some reason this element hogs all the stretch
 //				vertical-stretch: 0.1;
 			}
 		}

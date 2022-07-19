@@ -7,6 +7,7 @@ edition = "2021"
 members = ["injector"]
 
 [dependencies]
+sysinfo = "0.24.6"
 slint = "0.2.5"
 log = { version = "0.4.17", features = ["std"] }
 chrono = "0.4.19"

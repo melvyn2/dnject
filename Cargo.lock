@@ -1993,6 +1993,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ntapi"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c28774a7fd2fbb4f0babd8237ce554b73af68021b5f695a3cebd6c59bac0980f"
+dependencies = [
+ "winapi",
+]
+
+[[package]]
 name = "num-integer"
 version = "0.1.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2501,6 +2510,7 @@ dependencies = [
  "log",
  "slint",
  "slint-build",
+ "sysinfo",
 ]
 
 [[package]]
@@ -3013,6 +3023,21 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "sysinfo"
+version = "0.24.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b6e19da72a8d75be4d40e4dd4686afca31507f26c3ffdf6bd3073278d9de0a0"
+dependencies = [
+ "cfg-if 1.0.0",
+ "core-foundation-sys 0.8.3",
+ "libc",
+ "ntapi",
+ "once_cell",
+ "rayon",
+ "winapi",
 ]
 
 [[package]]
