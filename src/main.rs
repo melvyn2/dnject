@@ -104,8 +104,8 @@ fn mod_library_list(
     moveup: bool,
 ) -> ModelRc<StandardListViewItem> {
     let newlist = VecModel::from(list.iter().collect::<Vec<StandardListViewItem>>());
-    let item = newlist.row_data(idx as usize).unwrap();
     // Our ui callback does bounds checking already
+    let item = newlist.row_data(idx as usize).unwrap();
     newlist.remove(idx as usize);
     if moveup {
         newlist.insert((idx - 1) as usize, item);

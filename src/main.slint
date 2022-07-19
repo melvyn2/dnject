@@ -88,6 +88,7 @@ MainWindow := Window {
 						}
 						Button {
 							text: "🠑";
+							enabled: LibListView.model.length > 0;
 							clicked => {
 								if (LibListView.current-item > 0) {
 									LibListView.model = mod-library-list(LibListView.model, LibListView.current-item, true);
@@ -97,6 +98,7 @@ MainWindow := Window {
 						}
 						Button {
 							text: "-";
+							enabled: LibListView.model.length > 0;
 							clicked => {
 								if (LibListView.current-item >= 0) {
 									LibListView.model = mod-library-list(LibListView.model, LibListView.current-item, false);
