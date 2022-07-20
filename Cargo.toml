@@ -11,6 +11,7 @@ sysinfo = "0.24.6"
 slint = "0.2.5"
 log = { version = "0.4.17", features = ["std"] }
 chrono = "0.4.19"
+native-dialog = { version = "0.6.3", features = ["windows_dpi_awareness", "windows_visual_styles"]}
 
 [build-dependencies]
 slint-build = "0.2.5"

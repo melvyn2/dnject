@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use log::{error, info, trace, warn};
@@ -85,16 +86,36 @@ fn fetch_proc_list(mode: SharedString) -> ModelRc<StandardListViewItem> {
     ModelRc::new(list)
 }
 
-fn file_prompt() -> SharedString {
-    error!("stub file_prompt() called");
-    SharedString::from(chrono::Local::now().format("%S").to_string())
+fn file_prompt() -> Vec<PathBuf> {
+    let diag = native_dialog::FileDialog::new().reset_location();
+    #[cfg(target_os = "linux")]
+    let diag = diag.add_filter("ELF Shared Object", &["so"]);
+    diag.add_filter("Dynamic Link Library", &["dll"])
+        .add_filter("All Files", &[""])
+        .show_open_multiple_file()
+        .unwrap_or_default()
 }
 
 fn add_library(list: ModelRc<StandardListViewItem>) -> ModelRc<StandardListViewItem> {
-    let path = file_prompt();
-    trace!("Adding library path {:?}", path);
     let newlist = VecModel::from(list.iter().collect::<Vec<StandardListViewItem>>());
-    newlist.insert(0, StandardListViewItem::from(path));
+    let mut paths = file_prompt();
+    paths.retain(|path| !path.as_os_str().is_empty());
+
+    info!("Adding {} libraries to list", paths.len());
+
+    for lib in paths {
+        if !lib.exists() {
+            warn!("Adding non-existent library path {:?}", lib);
+        } else {
+            trace!("Adding library path {:?}", lib);
+        }
+        newlist.insert(
+            0,
+            StandardListViewItem::from(SharedString::from(
+                lib.into_os_string().into_string().unwrap(),
+            )),
+        );
+    }
     ModelRc::new(newlist)
 }
 
