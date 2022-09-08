@@ -2,16 +2,19 @@
 name = "rinject"
 version = "0.1.0"
 edition = "2021"
+publish = false
 
 [workspace]
 members = ["injector"]
 
 [dependencies]
-sysinfo = "0.24.6"
-slint = "0.2.5"
-log = { version = "0.4.17", features = ["std"] }
-chrono = "0.4.19"
-native-dialog = { version = "0.6.3", features = ["windows_dpi_awareness", "windows_visual_styles"]}
+sysinfo = "0.26"
+cpp_core = "0.6"
+qt_core = "0.5"
+qt_gui = "0.5"
+qt_widgets = "0.5"
+qt_ui_tools = "0.5"
+qt_core_custom_events = "0.2"
 
 [build-dependencies]
-slint-build = "0.2.5"
+qt_ritual_build = "0.5"

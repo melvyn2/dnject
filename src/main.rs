@@ -1,176 +1,235 @@
-use std::path::PathBuf;
-use std::sync::Mutex;
+#![windows_subsystem = "windows"]
 
-use log::{error, info, trace, warn};
+use std::cell::RefCell;
+use std::ffi::CStr;
+use std::io::Lines;
+use std::mem::transmute;
+use std::rc::Rc;
 
-use slint::{Model, ModelRc, SharedString, StandardListViewItem, VecModel, Weak};
-use sysinfo::{Pid, PidExt, Process, ProcessExt, ProcessRefreshKind, System, SystemExt, UserExt};
+use cpp_core::{CastInto, CppBox, Ptr, StaticUpcast};
+use qt_core_custom_events::custom_event_filter::CustomEventFilter;
 
+use qt_core::{
+    CheckState, DropAction, q_event, q_init_resource, QBox, QEvent, QObject, qs, QStringList, slot,
+    SlotNoArgs, SlotOfBool, SlotOfInt,
+};
+use qt_gui::{QDragEnterEvent, QDropEvent};
+use qt_widgets::*;
+
+// mod old;
 mod ui;
-use ui::*;
+use ui::MainUI;
 
-struct SlintTextLogger(Mutex<Weak<MainWindow>>);
-
-impl log::Log for SlintTextLogger {
-    fn enabled(&self, _: &log::Metadata) -> bool {
-        true
-    }
-
-    fn log(&self, record: &log::Record) {
-        let timestamp = chrono::Local::now().format("%T%.6f");
-        let rec_string = format!("[{}] {} - {}\n", timestamp, record.level(), record.args());
-        print!("{}", rec_string);
-        let handle_lock = self.0.lock();
-        match handle_lock {
-            Ok(handle) => handle.unwrap().invoke_log(SharedString::from(rec_string)),
-            Err(err) => println!(
-                "[{}] ERROR - Failed to unlock MainWindow handle mutex in logger: {}",
-                timestamp, err
-            ),
-        };
-    }
-
-    fn flush(&self) {}
+struct MainWindow {
+    ui: MainUI,
+    wine_prefix_saved: RefCell<String>,
+    wine_loc_saved: RefCell<String>,
 }
 
-fn fetch_proc_list(mode: SharedString) -> ModelRc<StandardListViewItem> {
-    let mut system = System::new();
-    system.refresh_processes_specifics(ProcessRefreshKind::with_user(ProcessRefreshKind::new()));
-    system.refresh_users_list();
-
-    let mut procs: Vec<(&Pid, &Process)> = system
-        .processes()
-        .iter()
-        .filter(|(_, proc)| !proc.exe().as_os_str().is_empty()) // Filters out kernel threads
-        .collect::<Vec<_>>();
-    procs.sort_by_key(|(pid, _)| (-1i32 as u32) - pid.as_u32());
-
-    let mut user_filter = false;
-
-    // Filter processes based on combobox setting
-    match mode.as_str() {
-        "Owned Processes" => {
-            let cur_pid = &sysinfo::get_current_pid().unwrap();
-            let cur_proc = &system.processes()[cur_pid];
-            let cur_user = cur_proc.user_id().unwrap();
-            procs.retain(|(_, proc)| proc.user_id().map_or(false, |uid| uid == cur_user));
-            user_filter = true;
-        }
-        "Wine Processes" => {
-            procs.retain(|(_, proc)| proc.exe().ends_with("wine-preloader"));
-        }
-        "All Processes" => {}
-        other => warn!("Unexpected filter setting {:?}", other),
+impl StaticUpcast<QObject> for MainWindow {
+    unsafe fn static_upcast(ptr: Ptr<Self>) -> Ptr<QObject> {
+        ptr.ui.widget.as_ptr().static_upcast()
     }
-
-    info!("Filtered {} to {} processes", mode.as_str(), procs.len());
-
-    let list = VecModel::default();
-    for (pid, proc) in procs {
-        // TODO this could be better done by a view with columns (which slint doesn't have)
-        let entry = if user_filter {
-            format!("{} [{}]", proc.name(), pid)
-        } else {
-            format!(
-                "{} [{}] ({})",
-                proc.name(),
-                pid,
-                proc.user_id().map_or("?".to_string(), |uid| system
-                    .get_user_by_id(uid)
-                    .map_or(uid.to_string(), |user| user.name().to_string()))
-            )
-        };
-        list.push(StandardListViewItem::from(SharedString::from(entry)));
-    }
-
-    ModelRc::new(list)
 }
 
-fn file_prompt() -> Vec<PathBuf> {
-    let diag = native_dialog::FileDialog::new().reset_location();
-    #[cfg(target_os = "linux")]
-    let diag = diag.add_filter("ELF Shared Object", &["so"]);
-    diag.add_filter("Dynamic Link Library", &["dll"])
-        .add_filter("All Files", &[""])
-        .show_open_multiple_file()
-        .unwrap_or_default()
-}
-
-fn add_library(list: ModelRc<StandardListViewItem>) -> ModelRc<StandardListViewItem> {
-    let newlist = VecModel::from(list.iter().collect::<Vec<StandardListViewItem>>());
-    let mut paths = file_prompt();
-    paths.retain(|path| !path.as_os_str().is_empty());
-
-    info!("Adding {} libraries to list", paths.len());
-
-    for lib in paths {
-        if !lib.exists() {
-            warn!("Adding non-existent library path {:?}", lib);
-        } else {
-            trace!("Adding library path {:?}", lib);
+impl MainWindow {
+    fn new() -> Rc<Self> {
+        let new = Rc::new(Self {
+            ui: MainUI::new(),
+            wine_prefix_saved: RefCell::new("".to_string()),
+            wine_loc_saved: RefCell::new("".to_string()),
+        });
+        // Should be safe as this is guaranteed uninit object
+        unsafe {
+            new.init();
         }
-        newlist.insert(
-            0,
-            StandardListViewItem::from(SharedString::from(
-                lib.into_os_string().into_string().unwrap(),
-            )),
+        new
+    }
+    unsafe fn init(self: &Rc<Self>) {
+        self.add_event_filters();
+
+        self.bind_slots();
+
+        self.ui.widget.show();
+    }
+
+    unsafe fn add_event_filters(self: &Rc<Self>) {
+        let filter = CustomEventFilter::new(Self::lib_list_event_filter).into_raw_ptr();
+        self.ui.lib_list.install_event_filter(filter);
+    }
+
+    fn lib_list_event_filter(obj: &mut QObject, event: &mut QEvent) -> bool {
+        // Function body has to be unsafe rather than function, because the closure requires an FnMut
+        // Which only safe function pointers are
+        unsafe {
+            if event.type_() == q_event::Type::DragEnter {
+                println!("Trace: received DragEnter event.");
+                println!(
+                    "Trace: Event parent object: {:?}",
+                    CStr::from_ptr(obj.meta_object().class_name())
+                );
+                // Transmute is safe because we check the event type
+                let devent: &mut QDragEnterEvent = transmute(event);
+                let mime_data = devent.mime_data().text().to_std_string();
+                let urls: Vec<&str> = mime_data.lines().collect();
+                if devent.mime_data().has_urls() && !urls.iter().all(|url| url.is_empty() || url.ends_with('/')) {
+                    println!("Trace: event has valid data, accepting.");
+                    devent.set_drop_action(DropAction::LinkAction);
+                    devent.accept();
+                    return true;
+                }
+            } else if event.type_() == q_event::Type::Drop {
+                println!("Trace: received Drop event.");
+                println!(
+                    "Trace: parent object: {:?}",
+                    CStr::from_ptr(obj.meta_object().class_name())
+                );
+                // Transmute is safe because we check the event type
+                let devent: &mut QDropEvent = transmute(event);
+                let mime_data = devent.mime_data().text().to_std_string();
+                let urls: Vec<&str> = mime_data.lines().collect();
+                let list_widget: &mut QListWidget = transmute(obj);
+                for file in urls.iter().filter(|f| !f.ends_with('/')) {
+                    list_widget.add_item_q_string(qs(file.replacen("file://", "", 1)).as_ref());
+                }
+                devent.set_drop_action(DropAction::LinkAction);
+                devent.accept();
+                return true;
+            }
+            return false;
+        }
+    }
+
+    unsafe fn bind_slots(self: &Rc<Self>) {
+        self.ui
+            .target_tabs
+            .current_changed()
+            .connect(&self.slot_on_tab_changed());
+        self.ui
+            .proc_refresh
+            .clicked()
+            .connect(&self.slot_on_refresh_clicked());
+        self.ui
+            .wine_check
+            .toggled()
+            .connect(&self.slot_on_wine_toggled());
+        self.ui.lib_add.clicked().connect(&self.slot_on_lib_add());
+        self.ui.lib_pick.clicked().connect(&self.slot_on_lib_pick());
+        self.ui.lib_move.clicked().connect(&self.slot_on_lib_move());
+        self.ui.lib_del.clicked().connect(&self.slot_on_lib_del());
+        self.ui
+            .log_check
+            .toggled()
+            .connect(&self.slot_on_log_toggled());
+    }
+
+    #[slot(SlotOfInt)]
+    unsafe fn on_tab_changed(self: &Rc<Self>, _: i32) {
+        self.adjust_wine_inputs();
+        println!("Error: no tab change handler impl!")
+    }
+
+    // TODO not working
+    #[slot(SlotNoArgs)]
+    unsafe fn on_refresh_clicked(self: &Rc<Self>) {
+        let new_item =
+            QTreeWidgetItem::from_q_string_list(QStringList::from_q_string(&qs("a")).as_ref());
+        self.ui.proc_table.add_top_level_item(new_item.as_ptr());
+        println!(
+            "Error: refresh unimpl! {}",
+            self.ui.proc_table.top_level_item_count()
         );
     }
-    ModelRc::new(newlist)
-}
 
-fn mod_library_list(
-    list: ModelRc<StandardListViewItem>,
-    idx: i32,
-    moveup: bool,
-) -> ModelRc<StandardListViewItem> {
-    let newlist = VecModel::from(list.iter().collect::<Vec<StandardListViewItem>>());
-    // Our ui callback does bounds checking already
-    let item = newlist.row_data(idx as usize).unwrap();
-    newlist.remove(idx as usize);
-    if moveup {
-        newlist.insert((idx - 1) as usize, item);
+    #[slot(SlotOfBool)]
+    unsafe fn on_wine_toggled(self: &Rc<Self>, _: bool) {
+        self.adjust_wine_inputs();
+        println!("Error: wine mode unimpl!");
     }
-    ModelRc::new(newlist)
-}
 
-fn inject(target: StandardListViewItem, libs: ModelRc<StandardListViewItem>) {
-    trace!(
-        "inject({:?}, {:?})",
-        target.text,
-        libs.iter().map(|x| x.text).collect::<Vec<SharedString>>()
-    );
-    error!("stub inject() called");
+    #[slot(SlotNoArgs)]
+    unsafe fn on_lib_add(self: &Rc<Self>) {
+        self.ui.lib_list.add_item_q_string(qs("").as_ref());
+        self.ui
+            .lib_list
+            .set_current_row_1a(self.ui.lib_list.count() - 1);
+        println!("Error: adding libs unimpl!")
+    }
+    #[slot(SlotNoArgs)]
+    unsafe fn on_lib_pick(self: &Rc<Self>) {
+        println!("Error: lib picker unimpl!")
+    }
+    #[slot(SlotNoArgs)]
+    unsafe fn on_lib_move(self: &Rc<Self>) {
+        let row = self.ui.lib_list.current_row();
+        if row > 0 {
+            self.ui
+                .lib_list
+                .insert_item_int_q_list_widget_item(row - 1, self.ui.lib_list.take_item(row));
+            self.ui.lib_list.set_current_row_1a(row - 1);
+        }
+    }
+    #[slot(SlotNoArgs)]
+    unsafe fn on_lib_del(self: &Rc<Self>) {
+        self.ui.lib_list.take_item(self.ui.lib_list.current_row());
+    }
+
+    #[slot(SlotOfBool)]
+    unsafe fn on_log_toggled(self: &Rc<Self>, state: bool) {
+        self.ui.log_box.set_visible(state);
+        self.ui.widget.adjust_size();
+        if !state {
+            self.ui
+                .widget
+                .resize_2a(self.ui.widget.width(), self.ui.widget.height() - 100)
+        }
+    }
+
+    unsafe fn adjust_wine_inputs(self: &Rc<Self>) {
+        println!("Trace: adjust_wine_inputs called");
+
+        let wine_box = self.ui.wine_check.check_state() == CheckState::Checked;
+        let tab = self.ui.target_tabs.current_index();
+        let wine_editable = wine_box && tab == 1;
+
+        // Only save when leaving editable mode
+        if (self.ui.wine_loc.is_editable() || self.ui.wine_prefix.is_editable()) && !wine_editable {
+            self.save_wine_params();
+        }
+        self.ui.wine_prefix.set_enabled(wine_editable);
+        self.ui.wine_loc.set_enabled(wine_editable);
+        if wine_editable {
+            self.restore_wine_params();
+        } else {
+            self.ui.wine_prefix.set_edit_text(&qs(""));
+            self.ui.wine_loc.set_edit_text(&qs(""));
+        }
+    }
+
+    unsafe fn save_wine_params(self: &Rc<Self>) {
+        let pfx_cur = self.ui.wine_prefix.current_text().to_std_string();
+        let loc_cur = self.ui.wine_loc.current_text().to_std_string();
+        if !pfx_cur.trim().is_empty() {
+            self.wine_prefix_saved.replace(pfx_cur);
+        }
+        if !loc_cur.trim().is_empty() {
+            self.wine_loc_saved.replace(loc_cur);
+        }
+    }
+
+    unsafe fn restore_wine_params(self: &Rc<Self>) {
+        self.ui
+            .wine_prefix
+            .set_current_text(qs::<&str>(self.wine_prefix_saved.borrow().as_ref()).as_ref());
+        self.ui
+            .wine_loc
+            .set_current_text(qs::<&str>(self.wine_loc_saved.borrow().as_ref()).as_ref());
+    }
 }
 
 fn main() {
-    trace!("Creating MainWindow");
-    let main = MainWindow::new();
-
-    let logger = SlintTextLogger(Mutex::new(main.as_weak()));
-    log::set_boxed_logger(Box::new(logger))
-        .map(|()| log::set_max_level(log::LevelFilter::Trace))
-        .expect("Unable to init logger");
-    trace!("Logger init done");
-
-    main.on_fetch_proc_list(fetch_proc_list);
-    main.on_add_library(add_library);
-    main.on_mod_library_list(mod_library_list);
-    main.on_inject(inject);
-    main.on_quit(slint::quit_event_loop);
-    trace!("Callback bindings finished");
-
-    let modes = VecModel::from(vec![SharedString::from("Owned Processes")]);
-    #[cfg(target_os = "linux")]
-    modes.push(SharedString::from("Wine Processes"));
-    modes.push(SharedString::from("All Processes"));
-    // TODO when elevation is added, make All Processes default when euid == 0
-    main.set_proc_sel(modes.row_data(0).unwrap());
-    main.set_proc_modes(ModelRc::new(modes));
-
-    main.invoke_refresh_proc_list();
-    trace!("Populated UI elements");
-
-    info!("Starting event loop");
-    main.run();
+    QApplication::init(|q_app| unsafe {
+        let _mainui = MainWindow::new();
+        QApplication::exec()
+    })
 }
