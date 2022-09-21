@@ -2,19 +2,21 @@
 
 use std::cell::RefCell;
 use std::ffi::CStr;
-use std::io::Lines;
 use std::mem::transmute;
+use std::ops::Deref;
 use std::rc::Rc;
 
-use cpp_core::{CastInto, CppBox, Ptr, StaticUpcast};
-use qt_core_custom_events::custom_event_filter::CustomEventFilter;
+use cpp_core::{CppBox, Ptr, StaticUpcast};
 
 use qt_core::{
-    CheckState, DropAction, q_event, q_init_resource, QBox, QEvent, QObject, qs, QStringList, slot,
-    SlotNoArgs, SlotOfBool, SlotOfInt,
+    CheckState, DropAction, q_event, QEvent, QObject, qs, slot,
+    SlotNoArgs, SlotOfBool, SlotOfInt, QString,QVariant
 };
 use qt_gui::{QDragEnterEvent, QDropEvent};
 use qt_widgets::*;
+use qt_core_custom_events::custom_event_filter::CustomEventFilter;
+
+use sysinfo::{System, SystemExt, ProcessExt, RefreshKind, ProcessRefreshKind, PidExt, UserExt};
 
 // mod old;
 mod ui;
@@ -22,6 +24,7 @@ use ui::MainUI;
 
 struct MainWindow {
     ui: MainUI,
+    system_data: RefCell<System>,
     wine_prefix_saved: RefCell<String>,
     wine_loc_saved: RefCell<String>,
 }
@@ -36,12 +39,14 @@ impl MainWindow {
     fn new() -> Rc<Self> {
         let new = Rc::new(Self {
             ui: MainUI::new(),
+            system_data: RefCell::new(System::new_with_specifics(RefreshKind::new())),
             wine_prefix_saved: RefCell::new("".to_string()),
             wine_loc_saved: RefCell::new("".to_string()),
         });
         // Should be safe as this is guaranteed uninit object
         unsafe {
             new.init();
+            new.on_refresh_clicked();
         }
         new
     }
@@ -58,6 +63,7 @@ impl MainWindow {
         self.ui.lib_list.install_event_filter(filter);
     }
 
+    #[allow(clippy::needless_return)]
     fn lib_list_event_filter(obj: &mut QObject, event: &mut QEvent) -> bool {
         // Function body has to be unsafe rather than function, because the closure requires an FnMut
         // Which only safe function pointers are
@@ -69,13 +75,13 @@ impl MainWindow {
                     CStr::from_ptr(obj.meta_object().class_name())
                 );
                 // Transmute is safe because we check the event type
-                let devent: &mut QDragEnterEvent = transmute(event);
-                let mime_data = devent.mime_data().text().to_std_string();
+                let drag_event: &mut QDragEnterEvent = transmute(event);
+                let mime_data = drag_event.mime_data().text().to_std_string();
                 let urls: Vec<&str> = mime_data.lines().collect();
-                if devent.mime_data().has_urls() && !urls.iter().all(|url| url.is_empty() || url.ends_with('/')) {
+                if drag_event.mime_data().has_urls() && !urls.iter().all(|url| url.is_empty() || url.ends_with('/')) {
                     println!("Trace: event has valid data, accepting.");
-                    devent.set_drop_action(DropAction::LinkAction);
-                    devent.accept();
+                    drag_event.set_drop_action(DropAction::LinkAction);
+                    drag_event.accept();
                     return true;
                 }
             } else if event.type_() == q_event::Type::Drop {
@@ -85,15 +91,15 @@ impl MainWindow {
                     CStr::from_ptr(obj.meta_object().class_name())
                 );
                 // Transmute is safe because we check the event type
-                let devent: &mut QDropEvent = transmute(event);
-                let mime_data = devent.mime_data().text().to_std_string();
+                let drop_event: &mut QDropEvent = transmute(event);
+                let mime_data = drop_event.mime_data().text().to_std_string();
                 let urls: Vec<&str> = mime_data.lines().collect();
                 let list_widget: &mut QListWidget = transmute(obj);
                 for file in urls.iter().filter(|f| !f.ends_with('/')) {
                     list_widget.add_item_q_string(qs(file.replacen("file://", "", 1)).as_ref());
                 }
-                devent.set_drop_action(DropAction::LinkAction);
-                devent.accept();
+                drop_event.set_drop_action(DropAction::LinkAction);
+                drop_event.accept();
                 return true;
             }
             return false;
@@ -132,13 +138,25 @@ impl MainWindow {
     // TODO not working
     #[slot(SlotNoArgs)]
     unsafe fn on_refresh_clicked(self: &Rc<Self>) {
-        let new_item =
-            QTreeWidgetItem::from_q_string_list(QStringList::from_q_string(&qs("a")).as_ref());
-        self.ui.proc_table.add_top_level_item(new_item.as_ptr());
-        println!(
-            "Error: refresh unimpl! {}",
-            self.ui.proc_table.top_level_item_count()
-        );
+        self.ui.proc_table.clear();
+        // Init a new SysInfo System that loads a list of processes and loads user info about each process
+        // Along with the list of users, to map UIDs to users
+        let mut system = self.system_data.borrow_mut();
+        system.refresh_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new().with_user()).with_users_list());
+        for (&pid, proc) in system.processes() {
+            let proc_item: CppBox<QTreeWidgetItem> = QTreeWidgetItem::new();
+            proc_item.set_text(0, &qs(proc.name()));
+            // Use data rather than text to allow sorting
+            proc_item.set_data(1, 0, &QVariant::from_uint(pid.as_u32()));
+            proc_item.set_text(2, &match proc.user_id() {
+                Some(uid) => match system.get_user_by_id(uid) {
+                    Some(user) => qs(user.name()),
+                    None => QString::number_uint(*uid.deref()),
+                },
+                None => qs("")
+            });
+            self.ui.proc_table.insert_top_level_item(0, proc_item.into_ptr());
+        }
     }
 
     #[slot(SlotOfBool)]
@@ -228,8 +246,11 @@ impl MainWindow {
 }
 
 fn main() {
-    QApplication::init(|q_app| unsafe {
-        let _mainui = MainWindow::new();
+    // "Qt WebEngine seems to be initialized from a plugin. Please set Qt::AA_ShareOpenGLContexts
+    // using QCoreApplication::setAttribute before constructing QGuiApplication."
+    unsafe { qt_core::QCoreApplication::set_attribute_1a(qt_core::ApplicationAttribute::AAShareOpenGLContexts) };
+    QApplication::init(|_q_app| unsafe {
+        let _main_ui = MainWindow::new();
         QApplication::exec()
     })
 }
