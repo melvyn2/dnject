@@ -1,14 +1,9 @@
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+#[cfg(target_os = "macos")]
+mod macos;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[cfg(target_os = "linux")]
+#[cfg(target_os = "freebsd")]
+mod posix;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+#[cfg(target_os = "windows")]
+mod nt;

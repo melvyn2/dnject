@@ -13,6 +13,7 @@ pub struct MainUI {
     pub target_tabs: QPtr<QTabWidget>,
     pub target_pick: QPtr<QPushButton>,
     pub proc_table: QPtr<QTreeWidget>,
+    pub proc_owner_filter: QPtr<QCheckBox>,
     pub proc_refresh: QPtr<QPushButton>,
     pub wine_check: QPtr<QCheckBox>,
     pub wine_prefix: QPtr<QComboBox>,

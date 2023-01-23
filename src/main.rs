@@ -16,7 +16,7 @@ use qt_gui::{QDragEnterEvent, QDropEvent};
 use qt_widgets::*;
 use qt_core_custom_events::custom_event_filter::CustomEventFilter;
 
-use sysinfo::{System, SystemExt, ProcessExt, RefreshKind, ProcessRefreshKind, PidExt, UserExt};
+use sysinfo::{System, SystemExt, ProcessExt, RefreshKind, ProcessRefreshKind, PidExt, UserExt, Uid};
 
 // mod old;
 mod ui;
@@ -135,15 +135,28 @@ impl MainWindow {
         println!("Error: no tab change handler impl!")
     }
 
+    #[slot(SlotNoArgs)]
+    unsafe fn on_ownership_filter_clicked(self: &Rc<Self>) {
+
+    }
+
     // TODO not working
     #[slot(SlotNoArgs)]
     unsafe fn on_refresh_clicked(self: &Rc<Self>) {
         self.ui.proc_table.clear();
-        // Init a new SysInfo System that loads a list of processes and loads user info about each process
-        // Along with the list of users, to map UIDs to users
+
+        let ownership_filter = self.ui.proc_owner_filter.is_checked();
+        let wine_mode = self.ui.wine_check.is_checked();
+
         let mut system = self.system_data.borrow_mut();
         system.refresh_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new().with_user()).with_users_list());
+
+        let cur_uid = system.processes().iter().find(|&(&pid, _)| pid == sysinfo::get_current_pid().unwrap()).unwrap().1.user_id().unwrap();
+
         for (&pid, proc) in system.processes() {
+            if ownership_filter && proc.user_id().map(|uid| uid != cur_uid).unwrap_or(true) {
+                continue
+            }
             let proc_item: CppBox<QTreeWidgetItem> = QTreeWidgetItem::new();
             proc_item.set_text(0, &qs(proc.name()));
             // Use data rather than text to allow sorting
