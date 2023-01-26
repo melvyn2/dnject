@@ -18,6 +18,7 @@ pub struct MainUI {
     pub wine_check: QPtr<QCheckBox>,
     pub wine_prefix: QPtr<QComboBox>,
     pub wine_loc: QPtr<QComboBox>,
+    pub lib_list_layout: QPtr<QGridLayout>,
     pub lib_list: QPtr<QListWidget>,
     pub lib_add: QPtr<QToolButton>,
     pub lib_pick: QPtr<QToolButton>,
@@ -42,7 +43,9 @@ impl MainUI {
         self.log_box.set_visible(false);
 
         self.proc_table.header().set_stretch_last_section(false);
-        self.proc_table.header().set_section_resize_mode_2a(0, q_header_view::ResizeMode::Stretch);
+        self.proc_table
+            .header()
+            .set_section_resize_mode_2a(0, q_header_view::ResizeMode::Stretch);
         self.proc_table.header().resize_section(1, 60);
         self.proc_table.header().resize_section(2, 60);
 

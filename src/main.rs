@@ -9,14 +9,14 @@ use std::rc::Rc;
 use cpp_core::{CppBox, Ptr, StaticUpcast};
 
 use qt_core::{
-    CheckState, DropAction, q_event, QEvent, QObject, qs, slot,
-    SlotNoArgs, SlotOfBool, SlotOfInt, QString,QVariant
+    q_event, qs, slot, CheckState, DropAction, QEvent, QObject, QString, QVariant, SlotNoArgs,
+    SlotOfBool, SlotOfInt,
 };
+use qt_core_custom_events::custom_event_filter::CustomEventFilter;
 use qt_gui::{QDragEnterEvent, QDropEvent};
 use qt_widgets::*;
-use qt_core_custom_events::custom_event_filter::CustomEventFilter;
 
-use sysinfo::{System, SystemExt, ProcessExt, RefreshKind, ProcessRefreshKind, PidExt, UserExt, Uid};
+use sysinfo::{PidExt, ProcessExt, ProcessRefreshKind, RefreshKind, System, SystemExt, UserExt};
 
 // mod old;
 mod ui;
@@ -78,7 +78,9 @@ impl MainWindow {
                 let drag_event: &mut QDragEnterEvent = transmute(event);
                 let mime_data = drag_event.mime_data().text().to_std_string();
                 let urls: Vec<&str> = mime_data.lines().collect();
-                if drag_event.mime_data().has_urls() && !urls.iter().all(|url| url.is_empty() || url.ends_with('/')) {
+                if drag_event.mime_data().has_urls()
+                    && !urls.iter().all(|url| url.is_empty() || url.ends_with('/'))
+                {
                     println!("Trace: event has valid data, accepting.");
                     drag_event.set_drop_action(DropAction::LinkAction);
                     drag_event.accept();
@@ -98,6 +100,7 @@ impl MainWindow {
                 for file in urls.iter().filter(|f| !f.ends_with('/')) {
                     list_widget.add_item_q_string(qs(file.replacen("file://", "", 1)).as_ref());
                 }
+                list_widget.set_current_row_1a(list_widget.count() - 1);
                 drop_event.set_drop_action(DropAction::LinkAction);
                 drop_event.accept();
                 return true;
@@ -112,6 +115,11 @@ impl MainWindow {
             .current_changed()
             .connect(&self.slot_on_tab_changed());
         self.ui
+            .proc_owner_filter
+            .toggled()
+            .connect(&self.slot_on_refresh_clicked());
+
+        self.ui
             .proc_refresh
             .clicked()
             .connect(&self.slot_on_refresh_clicked());
@@ -119,6 +127,10 @@ impl MainWindow {
             .wine_check
             .toggled()
             .connect(&self.slot_on_wine_toggled());
+        self.ui
+            .lib_list
+            .current_row_changed()
+            .connect(&self.slot_on_lib_changed());
         self.ui.lib_add.clicked().connect(&self.slot_on_lib_add());
         self.ui.lib_pick.clicked().connect(&self.slot_on_lib_pick());
         self.ui.lib_move.clicked().connect(&self.slot_on_lib_move());
@@ -135,11 +147,6 @@ impl MainWindow {
         println!("Error: no tab change handler impl!")
     }
 
-    #[slot(SlotNoArgs)]
-    unsafe fn on_ownership_filter_clicked(self: &Rc<Self>) {
-
-    }
-
     // TODO not working
     #[slot(SlotNoArgs)]
     unsafe fn on_refresh_clicked(self: &Rc<Self>) {
@@ -149,26 +156,42 @@ impl MainWindow {
         let wine_mode = self.ui.wine_check.is_checked();
 
         let mut system = self.system_data.borrow_mut();
-        system.refresh_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new().with_user()).with_users_list());
+        system.refresh_specifics(
+            RefreshKind::new()
+                .with_processes(ProcessRefreshKind::new().with_user())
+                .with_users_list(),
+        );
 
-        let cur_uid = system.processes().iter().find(|&(&pid, _)| pid == sysinfo::get_current_pid().unwrap()).unwrap().1.user_id().unwrap();
+        let cur_uid = system
+            .processes()
+            .iter()
+            .find(|&(&pid, _)| pid == sysinfo::get_current_pid().unwrap())
+            .unwrap()
+            .1
+            .user_id()
+            .unwrap();
 
         for (&pid, proc) in system.processes() {
             if ownership_filter && proc.user_id().map(|uid| uid != cur_uid).unwrap_or(true) {
-                continue
+                continue;
             }
             let proc_item: CppBox<QTreeWidgetItem> = QTreeWidgetItem::new();
             proc_item.set_text(0, &qs(proc.name()));
             // Use data rather than text to allow sorting
             proc_item.set_data(1, 0, &QVariant::from_uint(pid.as_u32()));
-            proc_item.set_text(2, &match proc.user_id() {
-                Some(uid) => match system.get_user_by_id(uid) {
-                    Some(user) => qs(user.name()),
-                    None => QString::number_uint(*uid.deref()),
+            proc_item.set_text(
+                2,
+                &match proc.user_id() {
+                    Some(uid) => match system.get_user_by_id(uid) {
+                        Some(user) => qs(user.name()),
+                        None => QString::number_uint(*uid.deref()),
+                    },
+                    None => qs(""),
                 },
-                None => qs("")
-            });
-            self.ui.proc_table.insert_top_level_item(0, proc_item.into_ptr());
+            );
+            self.ui
+                .proc_table
+                .insert_top_level_item(0, proc_item.into_ptr());
         }
     }
 
@@ -176,6 +199,15 @@ impl MainWindow {
     unsafe fn on_wine_toggled(self: &Rc<Self>, _: bool) {
         self.adjust_wine_inputs();
         println!("Error: wine mode unimpl!");
+    }
+
+    #[slot(SlotOfInt)]
+    unsafe fn on_lib_changed(self: &Rc<Self>, _: i32) {
+        if self.ui.lib_list.count() > 0 {
+            self.ui
+                .lib_list
+                .set_style_sheet(qt_core::QString::new().as_ref());
+        }
     }
 
     #[slot(SlotNoArgs)]
@@ -261,7 +293,11 @@ impl MainWindow {
 fn main() {
     // "Qt WebEngine seems to be initialized from a plugin. Please set Qt::AA_ShareOpenGLContexts
     // using QCoreApplication::setAttribute before constructing QGuiApplication."
-    unsafe { qt_core::QCoreApplication::set_attribute_1a(qt_core::ApplicationAttribute::AAShareOpenGLContexts) };
+    unsafe {
+        qt_core::QCoreApplication::set_attribute_1a(
+            qt_core::ApplicationAttribute::AAShareOpenGLContexts,
+        )
+    };
     QApplication::init(|_q_app| unsafe {
         let _main_ui = MainWindow::new();
         QApplication::exec()
