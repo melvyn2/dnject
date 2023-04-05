@@ -5,10 +5,10 @@ edition = "2021"
 publish = false
 
 [workspace]
-members = ["injector"]
+members = ["injector", "injector/testlib"]
 
 [dependencies]
-sysinfo = "0.26"
+sysinfo = "0.28"
 cpp_core = "0.6"
 qt_core = "0.5"
 qt_gui = "0.5"
@@ -18,3 +18,17 @@ qt_core_custom_events = "0.2"
 
 [build-dependencies]
 qt_ritual_build = "0.5"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+#lto = true
+
+# see injector/src/macos/bootstrap.rs:8
+[profile.dev.package.injector]
+opt-level = 2
+debug-assertions = false
+
+# Needed for non-x86_64 darwin targets
+[patch.crates-io]
+ring = { git = "https://github.com/melvyn2/ring.git" }

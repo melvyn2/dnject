@@ -1,0 +1,12 @@
+[package]
+name = "testlib"
+version = "0.0.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ctor = "0.2"
+libc = "0.2"
+testbin = { path = "../testbin" }

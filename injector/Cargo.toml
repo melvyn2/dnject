@@ -3,6 +3,35 @@ name = "injector"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[[bin]]
+name = "injector"
+path = "src/main.rs"
+required-features = ["env_logger"]
+
+[features]
+# Until https://github.com/rust-lang/rfcs/pull/3374, leave env_logger as default dep and let consumers remove if desired
+default = ["wine", "env_logger"]
+wine = []  # No-op on non-unix
+macos-ent-bypass = []  # No-op on non-darwin
+test_broken = []  # Used to test broken methods
 
 [dependencies]
+env_logger = { version = "0.10", optional = true }
+libc = "0.2"
+log = "0.4"
+sysinfo = { version = "0.28", default-features = false }
+
+[dev-dependencies]
+testlib = { path = "./testlib", artifact = ["cdylib"] }
+testbin = { path = "./testbin", artifact = ["bin"], lib = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+darwin-libproc-sys = "0.2"
+spawn-task-port = { git = "https://github.com/melvyn2/spawn-task-port.git" }
+mach2 = "0.4"
+ctor = "0.2"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# This crate is so comically bloated that it brings our dependency tree (cargo-tree) from 44 lines to 904!!!!!!!!! WTF!!
+# Thankfully we don't need it except for tests
+apple-codesign = "0.22"
