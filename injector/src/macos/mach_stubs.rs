@@ -2,6 +2,31 @@
 #![allow(dead_code)]
 
 /// C-defs until mach2 is updated to support these APIs
+/// (and a helper macro)
+
+/// Wrap a mach API that returns `kern_return_t` to return according `Result`s
+macro_rules! mach_try {
+    ($e:expr) => {{
+        let kr = $e;
+        if kr == mach2::kern_return::KERN_SUCCESS {
+            Ok(())
+        } else {
+            let err_str = format!(
+                "`{}` failed with return code 0x{:x}: {}",
+                stringify!($e).split_once('(').unwrap().0,
+                kr,
+                std::ffi::CStr::from_ptr(crate::macos::mach_stubs::mach_error::mach_error_string(
+                    kr
+                ))
+                .to_string_lossy()
+            );
+            #[cfg(panic = "unwind")]
+            let err_str = format!("[{}:{}] {}", file!(), line!(), err_str);
+            Err(std::io::Error::new(std::io::ErrorKind::Other, err_str))
+        }
+    }};
+}
+pub(crate) use mach_try;
 
 pub mod ldsyms {
     //! This module corresponds to `mach-o/ldsyms.h`

@@ -18,8 +18,6 @@ use libc::{
 };
 
 use mach2::boolean::boolean_t;
-use mach2::kern_return::KERN_SUCCESS;
-use mach2::mach_types::thread_act_port_array_t;
 use mach2::port::mach_port_t;
 use mach2::thread_status::thread_state_t;
 use mach2::traps::{mach_task_self, task_for_pid};
@@ -36,34 +34,16 @@ mod bootstrap;
 mod mach_stubs;
 use crate::macos::mach_stubs::ldsyms::{_mh_execute_header, getsectiondata, mach_header_t};
 use crate::macos::mach_stubs::mach_error::mach_error_string;
+use crate::macos::mach_stubs::mach_try;
 use crate::macos::mach_stubs::machine::{CPU_TYPE_ANY, CPU_TYPE_ARM64, CPU_TYPE_X86_64};
+use crate::macos::mach_stubs::proc::P_TRANSLATED;
 use crate::macos::mach_stubs::sysctl::{kinfo_proc, CTL_MAXNAME};
 use crate::macos::mach_stubs::tasks::thread_create_running;
 use crate::macos::mach_stubs::thread_act::thread_terminate;
 use crate::macos::mach_stubs::traps::pid_for_task;
 
 mod task_port;
-use crate::macos::mach_stubs::proc::P_TRANSLATED;
 pub use task_port::TaskPort;
-
-/// A macro to wrap mach APIs that return `kern_return_t` to early-return
-/// a `std::io::Result` when they fail.
-macro_rules! mach_try {
-    ($e:expr) => {{
-        let kr = $e;
-        if kr != KERN_SUCCESS {
-            let err_str = format!(
-                "`{}` failed with return code 0x{:x}: {}",
-                stringify!($e).split_once('(').unwrap().0,
-                kr,
-                CStr::from_ptr(mach_error_string(kr)).to_string_lossy()
-            );
-            #[cfg(panic = "unwind")]
-            let err_str = format!("[{}:{}] {}", file!(), line!(), err_str);
-            return Err(Box::new(std::io::Error::new(ErrorKind::Other, err_str)));
-        }
-    }};
-}
 
 fn get_pid_cpu_type(pid: pid_t) -> Result<cpu_type_t, std::io::Error> {
     // See https://github.com/objective-see/ProcessMonitor/blob/1a9c2e0c8044ad10676efad480f200f12060ed7a/Library/Source/Process.m#L252
@@ -244,25 +224,20 @@ impl TryFrom<pid_t> for ProcHandle {
 
         Ok(Self {
             pid: target,
-            task_port: unsafe { TaskPort::from(task_port) },
+            task_port: unsafe { TaskPort::try_from(task_port)? },
             child_handle: None,
             modules: vec![],
         })
     }
 }
 
-impl ProcHandle {
-    /// Attempt to use an existing task port to gain access to a target
-    /// # Safety
-    /// Caller must ensure that the given `mach_port_t` is not in use elsewhere/is fully moved,
-    /// to avoid deallocation during use by caller or struct. (See [TaskPort])
-    // Can't put this in TryFrom<mach_port_t> because unsafe
-    pub unsafe fn try_from_task_port(
-        port: mach_port_t,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+impl TryFrom<mach_port_t> for ProcHandle {
+    type Error = std::io::Error;
+
+    fn try_from(port: mach_port_t) -> Result<Self, Self::Error> {
         let pid = unsafe {
             let mut pid = 0;
-            mach_try!(pid_for_task(port, &mut pid));
+            mach_try!(pid_for_task(port, &mut pid))?;
             pid
         };
 
@@ -275,11 +250,18 @@ impl ProcHandle {
 
         Ok(Self {
             pid,
-            task_port: TaskPort::from(port),
+            task_port: TaskPort::try_from(port)?,
             child_handle: None,
             modules: vec![],
         })
     }
+}
+
+impl ProcHandle {
+    /// Attempt to use an existing task port to gain access to a target
+    /// # Safety
+    /// Caller must ensure that the given `mach_port_t` is not in use elsewhere/is fully moved,
+    /// to avoid deallocation during use by caller or struct. (See [TaskPort])
 
     /// Spawns a child process using `cmd`, retains the [Child] handle, and
     /// attempts to gain the task port with [task_for_pid]
@@ -314,7 +296,7 @@ impl ProcHandle {
         // When child `exec`s new binary, this task port stops existing :(
         unsafe {
             let mut pid = 0;
-            mach_try!(pid_for_task(task_port, &mut pid));
+            mach_try!(pid_for_task(task_port, &mut pid))?;
         };
         log::trace!(
             "Validated task port name {} for pid {} by pid_for_task",
@@ -324,7 +306,7 @@ impl ProcHandle {
 
         Ok(ProcHandle {
             pid: child.id() as pid_t,
-            task_port: unsafe { TaskPort::from(task_port) },
+            task_port: TaskPort::try_from(task_port)?,
             child_handle: Some(child),
             modules: vec![],
         })
@@ -487,7 +469,7 @@ impl ProcHandle {
 
                 Ok(ProcHandle {
                     pid: child.id() as pid_t,
-                    task_port: unsafe { TaskPort::from(task_port) },
+                    task_port: TaskPort::try_from(task_port)?,
                     child_handle: Some(child),
                     modules: libs.iter().cloned().zip(shared_map.handles).collect(),
                 })
@@ -646,7 +628,7 @@ impl ProcHandle {
                 &mut prot,
                 &mut prot,
                 VM_INHERIT_SHARE
-            ));
+            ))?;
             r
         };
         log::trace!(
@@ -668,7 +650,7 @@ impl ProcHandle {
                 &mut prot,
                 &mut prot,
                 VM_INHERIT_SHARE
-            ));
+            ))?;
             r
         };
         log::trace!("Mapped data segment into target at 0x{:x}", remote_data_ptr);
@@ -703,7 +685,7 @@ impl ProcHandle {
                 &mut r,
                 remote_stack_size as mach_vm_size_t,
                 VM_FLAGS_ANYWHERE
-            ));
+            ))?;
             r
         };
         log::trace!(
@@ -831,8 +813,8 @@ impl ProcHandle {
                 addr_of_mut!(bootstrap_thread_state) as thread_state_t,
                 bootstrap_thread_size,
                 &mut r
-            ));
-            TaskPort::from(r)
+            ))?;
+            TaskPort::try_from(r)?
         };
 
         log::trace!(
@@ -1005,17 +987,17 @@ impl ProcHandle {
                 *self.task_port,
                 remote_code_ptr,
                 code_seg_size as mach_vm_size_t
-            ));
+            ))?;
             mach_try!(mach_vm_deallocate(
                 *self.task_port,
                 remote_data_ptr,
                 local_data.len() as mach_vm_size_t
-            ));
+            ))?;
             mach_try!(mach_vm_deallocate(
                 *self.task_port,
                 remote_stack_ptr,
                 remote_stack_size as mach_vm_size_t
-            ));
+            ))?;
             Global.deallocate(local_data.cast::<u8>(), local_data_layout);
         }
         log::trace!("All remote allocations deallocated");

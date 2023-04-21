@@ -1,14 +1,21 @@
 use std::ops::Deref;
-use std::rc::Rc;
 
-use mach2::mach_port::mach_port_deallocate;
-use mach2::port::mach_port_t;
+use mach2::mach_port::{mach_port_deallocate, mach_port_mod_refs};
+use mach2::port::{mach_port_t, MACH_PORT_RIGHT_SEND};
 use mach2::traps::mach_task_self;
 
-/// A reference-counted wrapper struct for [mach_port_t], to allow deallocation on drop
-#[derive(Clone)]
+use crate::macos::mach_stubs::mach_try;
+
+/// A wrapper struct for [mach_port_t], which ties Rust `clone` and `drop` to mach port refcounts
 pub struct TaskPort {
-    inner: Rc<mach_port_t>,
+    inner: mach_port_t,
+}
+
+impl Clone for TaskPort {
+    fn clone(&self) -> Self {
+        unsafe { mach_port_mod_refs(mach_task_self(), self.inner, MACH_PORT_RIGHT_SEND, 1) };
+        Self { inner: self.inner }
+    }
 }
 
 impl Deref for TaskPort {
@@ -22,19 +29,35 @@ impl Deref for TaskPort {
 impl Drop for TaskPort {
     fn drop(&mut self) {
         unsafe {
-            mach_port_deallocate(mach_task_self(), *self.inner);
+            // Decrements port refcount, doesn't deallocate unless refcount is 0
+            mach_port_deallocate(mach_task_self(), self.inner);
         }
     }
 }
 
+impl TryFrom<mach_port_t> for TaskPort {
+    type Error = std::io::Error;
+
+    fn try_from(value: mach_port_t) -> Result<Self, Self::Error> {
+        unsafe {
+            mach_try!(mach_port_mod_refs(
+                mach_task_self(),
+                value,
+                MACH_PORT_RIGHT_SEND,
+                1
+            ))?
+        };
+        Ok(Self { inner: value })
+    }
+}
+
 impl TaskPort {
+    /// "Moves" the given port into the wrapper struct (does not increment refcount) without checking
+    /// validity
     /// # Safety
-    /// Caller must ensure that the given [mach_port_t] is unique (the only used copy), to avoid
-    /// deallocation during use if the created struct is dropped while the port is in use elsewhere,
-    /// and the inverse.
-    pub unsafe fn from(value: mach_port_t) -> Self {
-        Self {
-            inner: Rc::new(value),
-        }
+    /// The provided port name must map to a valid send right. Additionally, if the caller continues
+    /// using the given raw port, the caller must manually increment its mach refcount.
+    unsafe fn move_from(value: mach_port_t) -> Self {
+        Self { inner: value }
     }
 }
