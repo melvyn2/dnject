@@ -5,16 +5,20 @@ edition = "2021"
 publish = false
 
 [workspace]
-members = ["injector", "injector/testlib"]
+members = ["injector", "injector/testlib", "mach_util"]
 
 [dependencies]
-sysinfo = "0.28"
 cpp_core = "0.6"
+log = "0.4"
 qt_core = "0.5"
 qt_gui = "0.5"
 qt_widgets = "0.5"
 qt_ui_tools = "0.5"
 qt_core_custom_events = "0.2"
+sysinfo = "0.28"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+macos_portfetch = { path = "macos_portfetch" }
 
 [build-dependencies]
 qt_ritual_build = "0.5"
@@ -22,7 +26,7 @@ qt_ritual_build = "0.5"
 [profile.release]
 panic = "abort"
 codegen-units = 1
-#lto = true
+lto = true
 
 # see injector/src/macos/bootstrap.rs:8
 [profile.dev.package.injector]

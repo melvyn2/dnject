@@ -7,7 +7,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command};
-use std::ptr::{addr_of_mut, copy_nonoverlapping, null, null_mut};
+use std::ptr::{addr_of, addr_of_mut, copy_nonoverlapping, null, null_mut};
 use std::sync::atomic::{fence, AtomicU8, Ordering};
 use std::thread::sleep;
 use std::time::Duration;
@@ -29,18 +29,17 @@ use mach2::vm_types::{mach_vm_address_t, mach_vm_size_t};
 
 use spawn_task_port::CommandSpawnWithTask;
 
-mod bootstrap;
+use mach_util::ldsyms::{_mh_execute_header, getsectiondata};
+use mach_util::mach_error::mach_error_string;
+use mach_util::mach_try;
+use mach_util::machine::{CPU_TYPE_ANY, CPU_TYPE_ARM64, CPU_TYPE_X86_64};
+use mach_util::proc::P_TRANSLATED;
+use mach_util::sysctl::{kinfo_proc, CTL_MAXNAME};
+use mach_util::tasks::thread_create_running;
+use mach_util::thread_act::thread_terminate;
+use mach_util::traps::pid_for_task;
 
-mod mach_stubs;
-use crate::macos::mach_stubs::ldsyms::{_mh_execute_header, getsectiondata, mach_header_t};
-use crate::macos::mach_stubs::mach_error::mach_error_string;
-use crate::macos::mach_stubs::mach_try;
-use crate::macos::mach_stubs::machine::{CPU_TYPE_ANY, CPU_TYPE_ARM64, CPU_TYPE_X86_64};
-use crate::macos::mach_stubs::proc::P_TRANSLATED;
-use crate::macos::mach_stubs::sysctl::{kinfo_proc, CTL_MAXNAME};
-use crate::macos::mach_stubs::tasks::thread_create_running;
-use crate::macos::mach_stubs::thread_act::thread_terminate;
-use crate::macos::mach_stubs::traps::pid_for_task;
+mod bootstrap;
 
 mod task_port;
 pub use task_port::TaskPort;
@@ -557,7 +556,7 @@ impl ProcHandle {
             let mut seg_size = 0;
             let seg_ptr = unsafe {
                 getsectiondata(
-                    &_mh_execute_header as *const mach_header_t,
+                    addr_of!(_mh_execute_header),
                     CStr::from_bytes_with_nul(b"__SHELLCODE\0")
                         .unwrap()
                         .as_ptr(),
@@ -712,7 +711,7 @@ impl ProcHandle {
                     bootstrap_status: AtomicU8::new(0),
                     loader_status: AtomicU8::new(0),
                     tsd_base: remote_stack_ptr as *mut c_void,
-                    thread_set_tsd_base: mach_stubs::traps::_thread_set_tsd_base,
+                    thread_set_tsd_base: mach_util::traps::_thread_set_tsd_base,
                     mach_thread_self: mach2::mach_init::mach_thread_self,
                     thread_terminate,
                     pthread_create_from_mach_thread: pthread_create_from_mach_thread_fnptr,

@@ -4,7 +4,7 @@ use mach2::mach_port::{mach_port_deallocate, mach_port_mod_refs};
 use mach2::port::{mach_port_t, MACH_PORT_RIGHT_SEND};
 use mach2::traps::mach_task_self;
 
-use crate::macos::mach_stubs::mach_try;
+use mach_util::mach_try;
 
 /// A wrapper struct for [mach_port_t], which ties Rust `clone` and `drop` to mach port refcounts
 pub struct TaskPort {

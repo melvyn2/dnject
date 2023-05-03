@@ -1,32 +1,6 @@
+#![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
-
-/// C-defs until mach2 is updated to support these APIs
-/// (and a helper macro)
-
-/// Wrap a mach API that returns `kern_return_t` to return according `Result`s
-macro_rules! mach_try {
-    ($e:expr) => {{
-        let kr = $e;
-        if kr == mach2::kern_return::KERN_SUCCESS {
-            Ok(())
-        } else {
-            let err_str = format!(
-                "`{}` failed with return code 0x{:x}: {}",
-                stringify!($e).split_once('(').unwrap().0,
-                kr,
-                std::ffi::CStr::from_ptr(crate::macos::mach_stubs::mach_error::mach_error_string(
-                    kr
-                ))
-                .to_string_lossy()
-            );
-            #[cfg(panic = "unwind")]
-            let err_str = format!("[{}:{}] {}", file!(), line!(), err_str);
-            Err(std::io::Error::new(std::io::ErrorKind::Other, err_str))
-        }
-    }};
-}
-pub(crate) use mach_try;
 
 pub mod ldsyms {
     //! This module corresponds to `mach-o/ldsyms.h`
@@ -85,6 +59,13 @@ pub mod mach_error {
     }
 }
 
+pub mod mach_types {
+    use libc::c_uint;
+
+    pub type audit_token_t = [c_uint; 8];
+    pub type security_token_t = [c_uint; 2];
+}
+
 pub mod machine {
     use libc::cpu_type_t;
 
@@ -97,6 +78,61 @@ pub mod machine {
 
     pub const CPU_TYPE_ARM: cpu_type_t = 12;
     pub const CPU_TYPE_ARM64: cpu_type_t = CPU_TYPE_ARM | CPU_ARCH_ABI64;
+}
+
+pub mod message {
+    use mach2::message::{
+        mach_msg_bits_t, mach_msg_body_t, mach_msg_header_t, mach_msg_option_t,
+        mach_msg_port_descriptor_t, mach_msg_trailer_size_t, mach_msg_trailer_type_t,
+        MACH_MSGH_BITS_REMOTE_MASK,
+    };
+
+    use crate::mach_types::{audit_token_t, security_token_t};
+    use crate::port::mach_port_seqno_t;
+
+    pub const MACH_RCV_TRAILER_AUDIT: mach_msg_option_t = 3;
+
+    #[repr(C)]
+    pub struct mach_msg_audit_trailer_t {
+        pub msgh_trailer_type: mach_msg_trailer_type_t,
+        pub msgh_trailer_size: mach_msg_trailer_size_t,
+        pub msgh_seqno: mach_port_seqno_t,
+        pub msgh_sender: security_token_t,
+        pub msgh_audit: audit_token_t,
+    }
+
+    #[repr(C)]
+    pub struct mach_msg_send_t {
+        pub msg_header: mach_msg_header_t,
+        pub msg_body: mach_msg_body_t,
+        pub task_port: mach_msg_port_descriptor_t,
+    }
+
+    #[repr(C)]
+    pub struct mach_msg_recv_t {
+        pub msg_header: mach_msg_header_t,
+        pub msg_body: mach_msg_body_t,
+        pub task_port: mach_msg_port_descriptor_t,
+        pub msg_trailer: mach_msg_audit_trailer_t,
+    }
+
+    pub(crate) fn MACH_MSGH_BITS_REMOTE(remote: mach_msg_bits_t) -> mach_msg_bits_t {
+        (remote) & MACH_MSGH_BITS_REMOTE_MASK
+    }
+
+    pub(crate) fn MACH_RCV_TRAILER_TYPE(msg_type: mach_msg_option_t) -> mach_msg_option_t {
+        ((msg_type) & 0xf) << 28
+    }
+
+    pub(crate) fn MACH_RCV_TRAILER_ELEMENTS(msg_elems: mach_msg_option_t) -> mach_msg_option_t {
+        ((msg_elems) & 0xf) << 24
+    }
+}
+
+pub mod port {
+    use mach2::vm_types::natural_t;
+
+    pub type mach_port_seqno_t = natural_t;
 }
 
 pub mod proc {
@@ -367,5 +403,33 @@ pub mod traps {
         pub fn pid_for_task(task: task_t, pid: *mut c_int) -> kern_return_t;
 
         pub fn _thread_set_tsd_base(base: *mut c_void);
+    }
+}
+
+pub mod private {
+    //! Apple internal/private/undocumented APIs
+
+    use mach2::kern_return::kern_return_t;
+    use mach2::port::mach_port_t;
+
+    extern "C" {
+        // Not public, but used internally by the Obj-C bootstrap API
+        pub(crate) fn bootstrap_register2(
+            bp: mach_port_t,
+            service_name: *const i8,
+            sp: mach_port_t,
+            flags: u64,
+        ) -> kern_return_t;
+    }
+}
+
+pub mod bsm {
+    use crate::mach_types::audit_token_t;
+
+    #[link(name = "bsm")]
+    extern "C" {
+        // Rust complains about passing [c_uint; 8] through the C ABI, but that's what the arg is in apple's docs
+        #[allow(improper_ctypes)]
+        pub(crate) fn audit_token_to_pid(audit_token: audit_token_t) -> u32;
     }
 }
