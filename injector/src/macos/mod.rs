@@ -18,6 +18,7 @@ use libc::{
 };
 
 use mach2::boolean::boolean_t;
+use mach2::mach_port::mach_port_deallocate;
 use mach2::port::mach_port_t;
 use mach2::thread_status::thread_state_t;
 use mach2::traps::{mach_task_self, task_for_pid};
@@ -40,9 +41,6 @@ use mach_util::thread_act::thread_terminate;
 use mach_util::traps::pid_for_task;
 
 mod bootstrap;
-
-mod task_port;
-pub use task_port::TaskPort;
 
 fn get_pid_cpu_type(pid: pid_t) -> Result<cpu_type_t, std::io::Error> {
     // See https://github.com/objective-see/ProcessMonitor/blob/1a9c2e0c8044ad10676efad480f200f12060ed7a/Library/Source/Process.m#L252
@@ -188,7 +186,7 @@ fn ensure_matching_arch(target: pid_t) -> Result<(), std::io::Error> {
 // `com.apple.security.cs.disable-library-validation`, we could probably manually map?
 pub struct ProcHandle {
     pid: pid_t,
-    task_port: TaskPort,
+    task_port: mach_port_t,
     child_handle: Option<Child>,
     modules: Vec<ModHandle>,
 }
@@ -223,7 +221,7 @@ impl TryFrom<pid_t> for ProcHandle {
 
         Ok(Self {
             pid: target,
-            task_port: unsafe { TaskPort::try_from(task_port)? },
+            task_port,
             child_handle: None,
             modules: vec![],
         })
@@ -233,23 +231,26 @@ impl TryFrom<pid_t> for ProcHandle {
 impl TryFrom<mach_port_t> for ProcHandle {
     type Error = std::io::Error;
 
-    fn try_from(port: mach_port_t) -> Result<Self, Self::Error> {
+    /// Checks if the port is a valid task port and creates a new handle from it.
+    /// This has move semantics in regards to the mach port, as its refcount is not incremented.
+    /// The callee must manually increment the refcount if it needs to continue using the port.
+    fn try_from(task_port: mach_port_t) -> Result<Self, Self::Error> {
         let pid = unsafe {
             let mut pid = 0;
-            mach_try!(pid_for_task(port, &mut pid))?;
+            mach_try!(pid_for_task(task_port, &mut pid))?;
             pid
         };
 
         // If `pid_for_task` succeeded, the port is a valid task port
         log::trace!(
             "Validated task port name {} for pid {} by pid_for_task",
-            port,
+            task_port,
             pid
         );
 
         Ok(Self {
             pid,
-            task_port: TaskPort::try_from(port)?,
+            task_port,
             child_handle: None,
             modules: vec![],
         })
@@ -305,7 +306,7 @@ impl ProcHandle {
 
         Ok(ProcHandle {
             pid: child.id() as pid_t,
-            task_port: TaskPort::try_from(task_port)?,
+            task_port,
             child_handle: Some(child),
             modules: vec![],
         })
@@ -424,7 +425,7 @@ impl ProcHandle {
                     shared_map.handles[idx] = res;
                 }
                 // Safe from overflow, because max idx is u8::MAX - 1
-                // If succeses < libs len, error occurred in injection
+                // If successes < libs len, error occurred in injection
                 shared_map.successes += 1;
                 // Store data
                 (shared_map_ptr_for_target as *mut SharedMem).write(shared_map);
@@ -468,7 +469,7 @@ impl ProcHandle {
 
                 Ok(ProcHandle {
                     pid: child.id() as pid_t,
-                    task_port: TaskPort::try_from(task_port)?,
+                    task_port,
                     child_handle: Some(child),
                     modules: libs.iter().cloned().zip(shared_map.handles).collect(),
                 })
@@ -616,7 +617,7 @@ impl ProcHandle {
             let mut r: mach_vm_address_t = 0;
             let mut prot = VM_PROT_READ | VM_PROT_EXECUTE;
             mach_try!(mach_vm_remap(
-                *self.task_port,
+                self.task_port,
                 &mut r,
                 code_seg_size as mach_vm_size_t, // Rounded to page size in function
                 0,                               // Already page-aligned
@@ -638,7 +639,7 @@ impl ProcHandle {
             let mut r: mach_vm_address_t = 0;
             let mut prot = VM_PROT_READ | VM_PROT_WRITE;
             mach_try!(mach_vm_remap(
-                *self.task_port,
+                self.task_port,
                 &mut r,
                 local_data.len() as mach_vm_size_t, // Rounded to page size in function
                 0,                                  // Already page-aligned
@@ -680,7 +681,7 @@ impl ProcHandle {
         let remote_stack_ptr = unsafe {
             let mut r: mach_vm_address_t = 0;
             mach_try!(mach_vm_allocate(
-                *self.task_port,
+                self.task_port,
                 &mut r,
                 remote_stack_size as mach_vm_size_t,
                 VM_FLAGS_ANYWHERE
@@ -807,18 +808,18 @@ impl ProcHandle {
         let remote_thread = unsafe {
             let mut r: mach_port_t = 0;
             mach_try!(thread_create_running(
-                *self.task_port,
+                self.task_port,
                 bootstrap_thread_flavor,
                 addr_of_mut!(bootstrap_thread_state) as thread_state_t,
                 bootstrap_thread_size,
                 &mut r
             ))?;
-            TaskPort::try_from(r)?
+            r
         };
 
         log::trace!(
             "Spawned remote thread with thread port name {}",
-            *remote_thread,
+            remote_thread,
         );
 
         let mut timeout = 0;
@@ -839,7 +840,7 @@ impl ProcHandle {
 
         // By this point, either the thread gave a terminal status or the 1sec timeout expired
         // This is hopefully unnecessary (child should call thread_terminate on itself)
-        unsafe { thread_terminate(*remote_thread) };
+        unsafe { thread_terminate(remote_thread) };
         match status {
             0 => {
                 return Err(Box::new(std::io::Error::new(
@@ -902,7 +903,7 @@ impl ProcHandle {
                 )));
             }
             2 => {
-                // SAFETY: 2 is a completed status, so this thread is sole accesor of data struct
+                // SAFETY: 2 is a completed status, so this thread is sole accessor of data struct
                 let handles = unsafe {
                     local_data
                         .cast::<bootstrap::RemoteThreadData>()
@@ -975,7 +976,7 @@ impl ProcHandle {
                 &new_modules
             );
         } else {
-            log::info!("Sucessfully injected {} modules", new_modules.len());
+            log::info!("Successfully injected {} modules", new_modules.len());
         }
 
         self.modules.append(&mut new_modules);
@@ -983,17 +984,17 @@ impl ProcHandle {
         // Deallocation time
         unsafe {
             mach_try!(mach_vm_deallocate(
-                *self.task_port,
+                self.task_port,
                 remote_code_ptr,
                 code_seg_size as mach_vm_size_t
             ))?;
             mach_try!(mach_vm_deallocate(
-                *self.task_port,
+                self.task_port,
                 remote_data_ptr,
                 local_data.len() as mach_vm_size_t
             ))?;
             mach_try!(mach_vm_deallocate(
-                *self.task_port,
+                self.task_port,
                 remote_stack_ptr,
                 remote_stack_size as mach_vm_size_t
             ))?;
@@ -1004,10 +1005,10 @@ impl ProcHandle {
         Ok(())
     }
 
-    /// Returns a reference counted copy of the underlying task port. The copy can be used even
-    /// after this handle struct is dropped.
-    pub fn get_task_port(&self) -> TaskPort {
-        self.task_port.clone()
+    /// Returns a reference counted copy of the underlying task port. The port refcount is incremented,
+    /// so the consumer must call mach_port_deallocate
+    pub fn get_task_port(&self) -> mach_port_t {
+        self.task_port
     }
 
     /// Returns the process ID of the underlying process
@@ -1025,5 +1026,11 @@ impl ProcHandle {
     // or [new_pre_inject](Self::new)
     pub fn take_proc_child(&mut self) -> Option<Child> {
         self.child_handle.take()
+    }
+}
+
+impl Drop for ProcHandle {
+    fn drop(&mut self) {
+        unsafe {mach_port_deallocate(mach_task_self(), self.task_port)};
     }
 }
