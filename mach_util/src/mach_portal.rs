@@ -1,13 +1,12 @@
-use libc::pid_t;
-use mach2::bootstrap::bootstrap_look_up;
-use mach2::mach_port::{mach_port_allocate, mach_port_deallocate, mach_port_insert_right};
 use std::ffi::CString;
-use std::io::ErrorKind;
 use std::mem;
 use std::mem::MaybeUninit;
 use std::ptr::addr_of_mut;
 
-use crate::bsm::audit_token_to_pid;
+use libc::pid_t;
+
+use mach2::bootstrap::bootstrap_look_up;
+use mach2::mach_port::{mach_port_allocate, mach_port_deallocate, mach_port_insert_right};
 use mach2::message::{
     mach_msg, mach_msg_body_t, mach_msg_header_t, mach_msg_port_descriptor_t,
     MACH_MSGH_BITS_COMPLEX, MACH_MSG_TIMEOUT_NONE, MACH_MSG_TYPE_COPY_SEND,
@@ -18,6 +17,7 @@ use mach2::task::{task_get_special_port, TASK_BOOTSTRAP_PORT};
 use mach2::traps::mach_task_self;
 
 use crate::mach_try;
+use crate::bsm::audit_token_to_pid;
 use crate::message::{
     mach_msg_recv_t, mach_msg_send_t, MACH_MSGH_BITS_REMOTE, MACH_RCV_TRAILER_AUDIT,
     MACH_RCV_TRAILER_ELEMENTS, MACH_RCV_TRAILER_TYPE,
@@ -104,7 +104,7 @@ impl MachPortal {
     }
 
     /// Send a mach port through this port
-    pub fn send_port(self, port: mach_port_t) -> Result<(), std::io::Error> {
+    pub fn send_port(&self, port: mach_port_t) -> Result<(), std::io::Error> {
         let mut msg = mach_msg_send_t {
             msg_header: mach_msg_header_t {
                 msgh_bits: MACH_MSGH_BITS_REMOTE(MACH_MSG_TYPE_COPY_SEND) | MACH_MSGH_BITS_COMPLEX,
@@ -134,7 +134,7 @@ impl MachPortal {
     }
 
     /// Block on and receive a mach port through this port
-    pub fn receive_port(self, pid: Option<pid_t>) -> Result<mach_port_t, std::io::Error> {
+    pub fn receive_port(&self) -> Result<(mach_port_t, pid_t), std::io::Error> {
         let msg: mach_msg_recv_t = unsafe {
             let mut r: MaybeUninit<mach_msg_recv_t> = MaybeUninit::zeroed();
             mach_try!(mach_msg(
@@ -151,23 +151,13 @@ impl MachPortal {
             r.assume_init()
         };
 
-        // Check that the message was send by the child
-        if let Some(check_pid) = pid {
-            unsafe {
-                if audit_token_to_pid(msg.msg_trailer.msgh_audit) != check_pid as u32 {
-                    return Err(std::io::Error::new(
-                        ErrorKind::Other,
-                        format!(
-                            "expected task port for child pid {}, got pid {} instead",
-                            check_pid,
-                            audit_token_to_pid(msg.msg_trailer.msgh_audit)
-                        ),
-                    ));
-                }
-            }
-        }
+        let recv_pid = unsafe {audit_token_to_pid(msg.msg_trailer.msgh_audit)};
 
-        Ok(msg.task_port.name)
+        Ok((msg.task_port.name, recv_pid as pid_t))
+    }
+
+    pub fn bootstrap_name(&self) -> &str {
+        &self.bootstrap_name
     }
 }
 

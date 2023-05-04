@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 
 [workspace]
-members = ["injector", "injector/testlib", "mach_util"]
+members = ["injector", "injector/testlib", "mach_util", "macos_portfetch", "macos_portfetch/macos_portfetch_internal"]
 
 [dependencies]
 cpp_core = "0.6"
