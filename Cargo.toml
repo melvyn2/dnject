@@ -15,7 +15,8 @@ qt_gui = "0.5"
 qt_widgets = "0.5"
 qt_ui_tools = "0.5"
 qt_core_custom_events = "0.2"
-sysinfo = "0.28"
+sysinfo = "0.29"
+injector = { path = "injector" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 macos_portfetch = { path = "macos_portfetch" }

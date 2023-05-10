@@ -1,10 +1,8 @@
 use std::alloc::{Allocator, Global, Layout};
-use std::cmp::min;
 use std::ffi::{c_char, c_int, c_ulong, c_void, CStr, CString};
 use std::io::ErrorKind;
 use std::mem::{size_of, MaybeUninit};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::ptr::{addr_of, addr_of_mut, copy_nonoverlapping, null, null_mut};
@@ -14,7 +12,7 @@ use std::time::Duration;
 
 use libc::{
     c_uint, cpu_type_t, pid_t, sysctl, sysctlnametomib, CTL_KERN, KERN_PROC, KERN_PROC_PID,
-    MAP_ANONYMOUS, MAP_FAILED, MAP_SHARED, PROT_READ, PROT_WRITE, RTLD_NOW, _SC_PAGESIZE,
+    _SC_PAGESIZE,
 };
 
 use mach2::boolean::boolean_t;
@@ -27,8 +25,6 @@ use mach2::vm_inherit::VM_INHERIT_SHARE;
 use mach2::vm_prot::{VM_PROT_EXECUTE, VM_PROT_READ, VM_PROT_WRITE};
 use mach2::vm_statistics::VM_FLAGS_ANYWHERE;
 use mach2::vm_types::{mach_vm_address_t, mach_vm_size_t};
-
-use spawn_task_port::CommandSpawnWithTask;
 
 use mach_util::ldsyms::{_mh_execute_header, getsectiondata};
 use mach_util::mach_error::mach_error_string;
@@ -277,6 +273,10 @@ impl ProcHandle {
     /// injection or module manipulation
     #[cfg(feature = "test_broken")] // This is broken (seems like `exec` deletes task ports...)
     pub fn new_mpd(cmd: Command) -> Result<Self, Box<dyn std::error::Error>> {
+        // Put imports here as to not trigger clippy when function is ignored
+        use spawn_task_port::CommandSpawnWithTask;
+        use std::os::unix::process::CommandExt;
+
         let mut cmd = cmd;
         let (child, task_port) = cmd.spawn_get_task_port()?;
 
@@ -321,6 +321,9 @@ impl ProcHandle {
         cmd: Command,
         libs: &[PathBuf],
     ) -> Result<ProcHandle, Box<dyn std::error::Error>> {
+        use libc::{MAP_ANONYMOUS, MAP_FAILED, MAP_SHARED, PROT_READ, PROT_WRITE, RTLD_NOW};
+        use std::cmp::min;
+
         if libs.len() >= u8::MAX as usize {
             return Err(Box::new(std::io::Error::new(
                 ErrorKind::ArgumentListTooLong,
@@ -1031,6 +1034,6 @@ impl ProcHandle {
 
 impl Drop for ProcHandle {
     fn drop(&mut self) {
-        unsafe {mach_port_deallocate(mach_task_self(), self.task_port)};
+        unsafe { mach_port_deallocate(mach_task_self(), self.task_port) };
     }
 }

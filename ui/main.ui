@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>400</width>
-    <height>650</height>
+    <height>700</height>
    </rect>
   </property>
   <property name="sizePolicy">
@@ -51,134 +51,490 @@
     </widget>
    </item>
    <item>
-    <widget class="QTabWidget" name="target_tabs">
-     <property name="enabled">
-      <bool>true</bool>
-     </property>
-     <property name="sizePolicy">
-      <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
-       <horstretch>0</horstretch>
-       <verstretch>4</verstretch>
-      </sizepolicy>
-     </property>
+    <widget class="QStackedWidget" name="main_stack">
      <property name="currentIndex">
       <number>0</number>
      </property>
-     <widget class="QWidget" name="native_proc_tab">
-      <property name="sizePolicy">
-       <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
-        <horstretch>0</horstretch>
-        <verstretch>0</verstretch>
-       </sizepolicy>
-      </property>
-      <attribute name="title">
-       <string>Existing Process</string>
-      </attribute>
-      <attribute name="toolTip">
-       <string>Choose a running process to inject into</string>
-      </attribute>
-      <layout class="QVBoxLayout" name="verticalLayout_3">
+     <widget class="QWidget" name="target_page">
+      <layout class="QVBoxLayout" name="verticalLayout_5">
+       <property name="leftMargin">
+        <number>0</number>
+       </property>
+       <property name="topMargin">
+        <number>0</number>
+       </property>
+       <property name="rightMargin">
+        <number>0</number>
+       </property>
+       <property name="bottomMargin">
+        <number>0</number>
+       </property>
        <item>
-        <widget class="QTreeWidget" name="proc_table">
-         <property name="indentation">
+        <widget class="QTabWidget" name="target_tabs">
+         <property name="enabled">
+          <bool>true</bool>
+         </property>
+         <property name="currentIndex">
           <number>0</number>
          </property>
-         <property name="uniformRowHeights">
-          <bool>true</bool>
-         </property>
-         <property name="itemsExpandable">
-          <bool>false</bool>
-         </property>
-         <property name="sortingEnabled">
-          <bool>true</bool>
-         </property>
-         <property name="expandsOnDoubleClick">
-          <bool>false</bool>
-         </property>
-         <attribute name="headerDefaultSectionSize">
-          <number>60</number>
-         </attribute>
-         <attribute name="headerStretchLastSection">
-          <bool>true</bool>
-         </attribute>
-         <column>
-          <property name="text">
-           <string>Name</string>
+         <widget class="QWidget" name="proc_tab">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
           </property>
-         </column>
-         <column>
-          <property name="text">
-           <string>PID</string>
+          <attribute name="title">
+           <string>Existing Process</string>
+          </attribute>
+          <attribute name="toolTip">
+           <string>Choose a running process to inject into</string>
+          </attribute>
+          <layout class="QVBoxLayout" name="verticalLayout_3">
+           <item>
+            <widget class="QTreeWidget" name="proc_table">
+             <property name="indentation">
+              <number>0</number>
+             </property>
+             <property name="uniformRowHeights">
+              <bool>true</bool>
+             </property>
+             <property name="itemsExpandable">
+              <bool>false</bool>
+             </property>
+             <property name="sortingEnabled">
+              <bool>true</bool>
+             </property>
+             <property name="expandsOnDoubleClick">
+              <bool>false</bool>
+             </property>
+             <attribute name="headerDefaultSectionSize">
+              <number>60</number>
+             </attribute>
+             <attribute name="headerStretchLastSection">
+              <bool>true</bool>
+             </attribute>
+             <column>
+              <property name="text">
+               <string>Name</string>
+              </property>
+             </column>
+             <column>
+              <property name="text">
+               <string>PID</string>
+              </property>
+             </column>
+             <column>
+              <property name="text">
+               <string>Owner</string>
+              </property>
+             </column>
+             <item>
+              <property name="text">
+               <string>UI Filler Process 3</string>
+              </property>
+              <property name="text">
+               <string>3</string>
+              </property>
+              <property name="text">
+               <string>nobody</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>UI Filler Process 2</string>
+              </property>
+              <property name="text">
+               <string>2</string>
+              </property>
+              <property name="text">
+               <string>nobody</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>UI Filler Process</string>
+              </property>
+              <property name="text">
+               <string>1</string>
+              </property>
+              <property name="text">
+               <string>nobody</string>
+              </property>
+             </item>
+            </widget>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="proc_table_tools_layout">
+             <item>
+              <widget class="QCheckBox" name="proc_owner_filter">
+               <property name="toolTip">
+                <string>Filters the process list to processes owned by the current user</string>
+               </property>
+               <property name="text">
+                <string>Filter Ownership</string>
+               </property>
+               <property name="checked">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="proc_refresh">
+               <property name="sizePolicy">
+                <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+                 <horstretch>0</horstretch>
+                 <verstretch>0</verstretch>
+                </sizepolicy>
+               </property>
+               <property name="toolTip">
+                <string>Refresh the list of processes</string>
+               </property>
+               <property name="text">
+                <string>Refresh</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </widget>
+         <widget class="QWidget" name="launch_tab">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
           </property>
-         </column>
-         <column>
-          <property name="text">
-           <string>Owner</string>
-          </property>
-         </column>
-         <item>
-          <property name="text">
-           <string>UI Filler Process 3</string>
-          </property>
-          <property name="text">
-           <string>3</string>
-          </property>
-          <property name="text">
-           <string>nobody</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>UI Filler Process 2</string>
-          </property>
-          <property name="text">
-           <string>2</string>
-          </property>
-          <property name="text">
-           <string>nobody</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>UI Filler Process</string>
-          </property>
-          <property name="text">
-           <string>1</string>
-          </property>
-          <property name="text">
-           <string>nobody</string>
-          </property>
-         </item>
+          <attribute name="title">
+           <string>Launch New Process</string>
+          </attribute>
+          <attribute name="toolTip">
+           <string>Select an executable to launch as a child process and inject into</string>
+          </attribute>
+          <layout class="QGridLayout" name="gridLayout_2">
+           <property name="leftMargin">
+            <number>8</number>
+           </property>
+           <property name="rightMargin">
+            <number>8</number>
+           </property>
+           <property name="bottomMargin">
+            <number>3</number>
+           </property>
+           <property name="horizontalSpacing">
+            <number>8</number>
+           </property>
+           <property name="verticalSpacing">
+            <number>5</number>
+           </property>
+           <item row="0" column="1">
+            <widget class="QComboBox" name="exe_path_edit">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="toolTip">
+              <string>Path to the executable which dnject will probe and launch</string>
+             </property>
+             <property name="editable">
+              <bool>true</bool>
+             </property>
+             <property name="insertPolicy">
+              <enum>QComboBox::InsertAtTop</enum>
+             </property>
+             <property name="placeholderText">
+              <string>Executable Path</string>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="0" colspan="3">
+            <widget class="QGroupBox" name="env_gbox">
+             <property name="title">
+              <string>Environment variables</string>
+             </property>
+             <layout class="QGridLayout" name="gridLayout_3">
+              <property name="leftMargin">
+               <number>8</number>
+              </property>
+              <property name="topMargin">
+               <number>8</number>
+              </property>
+              <property name="rightMargin">
+               <number>8</number>
+              </property>
+              <property name="bottomMargin">
+               <number>5</number>
+              </property>
+              <property name="horizontalSpacing">
+               <number>3</number>
+              </property>
+              <item row="2" column="1">
+               <widget class="QToolButton" name="env_del_button">
+                <property name="sizePolicy">
+                 <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+                  <horstretch>0</horstretch>
+                  <verstretch>1</verstretch>
+                 </sizepolicy>
+                </property>
+                <property name="text">
+                 <string>+</string>
+                </property>
+               </widget>
+              </item>
+              <item row="2" column="0" rowspan="3">
+               <widget class="QTreeWidget" name="env_table">
+                <property name="showDropIndicator" stdset="0">
+                 <bool>false</bool>
+                </property>
+                <property name="alternatingRowColors">
+                 <bool>true</bool>
+                </property>
+                <property name="rootIsDecorated">
+                 <bool>false</bool>
+                </property>
+                <property name="sortingEnabled">
+                 <bool>true</bool>
+                </property>
+                <column>
+                 <property name="text">
+                  <string>Key</string>
+                 </property>
+                </column>
+                <column>
+                 <property name="text">
+                  <string>Value</string>
+                 </property>
+                </column>
+                <item>
+                 <property name="text">
+                  <string>UI Test Var</string>
+                 </property>
+                 <property name="text">
+                  <string>1</string>
+                 </property>
+                </item>
+                <item>
+                 <property name="text">
+                  <string>UI Test 2</string>
+                 </property>
+                 <property name="text">
+                  <string>/bin</string>
+                 </property>
+                </item>
+               </widget>
+              </item>
+              <item row="0" column="0">
+               <widget class="QCheckBox" name="inherit_env_checkbox">
+                <property name="toolTip">
+                 <string>Whether to include dnject's environment variables into the target launch environment.</string>
+                </property>
+                <property name="text">
+                 <string>Inherit environment</string>
+                </property>
+               </widget>
+              </item>
+              <item row="4" column="1">
+               <widget class="QToolButton" name="env_add_button">
+                <property name="enabled">
+                 <bool>false</bool>
+                </property>
+                <property name="sizePolicy">
+                 <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+                  <horstretch>0</horstretch>
+                  <verstretch>1</verstretch>
+                 </sizepolicy>
+                </property>
+                <property name="text">
+                 <string>-</string>
+                </property>
+               </widget>
+              </item>
+              <item row="3" column="1">
+               <spacer name="verticalSpacer">
+                <property name="orientation">
+                 <enum>Qt::Vertical</enum>
+                </property>
+                <property name="sizeHint" stdset="0">
+                 <size>
+                  <width>0</width>
+                  <height>0</height>
+                 </size>
+                </property>
+               </spacer>
+              </item>
+             </layout>
+            </widget>
+           </item>
+           <item row="0" column="0">
+            <widget class="QLabel" name="exe_label">
+             <property name="text">
+              <string>Executable</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="0">
+            <widget class="QLabel" name="cwd_label">
+             <property name="toolTip">
+              <string/>
+             </property>
+             <property name="text">
+              <string>Work Dir</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="2">
+            <widget class="QToolButton" name="exe_pick">
+             <property name="text">
+              <string/>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="2">
+            <widget class="QToolButton" name="cwd_pick">
+             <property name="text">
+              <string/>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="1">
+            <widget class="QComboBox" name="cwd_path_edit">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="toolTip">
+              <string>Optional path to the working directory in which the target will launch</string>
+             </property>
+             <property name="editable">
+              <bool>true</bool>
+             </property>
+             <property name="insertPolicy">
+              <enum>QComboBox::InsertAtTop</enum>
+             </property>
+             <property name="placeholderText">
+              <string>Working Directory (Optional)</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
         </widget>
        </item>
        <item>
-        <layout class="QHBoxLayout" name="proc_table_tools_layout">
+        <widget class="QGroupBox" name="wine_mode_gbox">
+         <property name="toolTip">
+          <string>Enable windows library injection in wine context of target</string>
+         </property>
+         <property name="title">
+          <string>Wine Mode</string>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <property name="checked">
+          <bool>false</bool>
+         </property>
+         <layout class="QGridLayout" name="wine_gbox_layout">
+          <property name="sizeConstraint">
+           <enum>QLayout::SetMinimumSize</enum>
+          </property>
+          <item row="0" column="1">
+           <widget class="QComboBox" name="wine_prefix">
+            <property name="enabled">
+             <bool>false</bool>
+            </property>
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
+            <property name="toolTip">
+             <string>The wine prefix that dnject will run the win32 injection in</string>
+            </property>
+            <property name="editable">
+             <bool>true</bool>
+            </property>
+            <property name="insertPolicy">
+             <enum>QComboBox::InsertAtTop</enum>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="0">
+           <widget class="QLabel" name="wine_loc_label">
+            <property name="text">
+             <string>Wine Binary</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QComboBox" name="wine_loc">
+            <property name="enabled">
+             <bool>false</bool>
+            </property>
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
+            <property name="toolTip">
+             <string>The wine executable that dnject will use to run the win32 injection</string>
+            </property>
+            <property name="editable">
+             <bool>true</bool>
+            </property>
+            <property name="insertPolicy">
+             <enum>QComboBox::InsertAtTop</enum>
+            </property>
+            <property name="duplicatesEnabled">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="0">
+           <widget class="QLabel" name="wine_prefix_label">
+            <property name="text">
+             <string>Prefix</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="probe_btn_layout">
          <item>
-          <widget class="QCheckBox" name="proc_owner_filter">
-           <property name="toolTip">
-            <string>Filters the process list to processes owned by the current user</string>
+          <spacer name="probe_btn_spacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
            </property>
-           <property name="text">
-            <string>Filter Ownership</string>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>0</width>
+             <height>0</height>
+            </size>
            </property>
-           <property name="checked">
-            <bool>true</bool>
-           </property>
-          </widget>
+          </spacer>
          </item>
          <item>
-          <widget class="QPushButton" name="proc_refresh">
-           <property name="sizePolicy">
-            <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-             <horstretch>0</horstretch>
-             <verstretch>0</verstretch>
-            </sizepolicy>
-           </property>
-           <property name="toolTip">
-            <string>Refresh the list of processes</string>
+          <widget class="QPushButton" name="probe_button">
+           <property name="enabled">
+            <bool>false</bool>
            </property>
            <property name="text">
-            <string>Refresh</string>
+            <string>Probe</string>
+           </property>
+           <property name="autoDefault">
+            <bool>true</bool>
+           </property>
+           <property name="default">
+            <bool>true</bool>
            </property>
           </widget>
          </item>
@@ -186,288 +542,497 @@
        </item>
       </layout>
      </widget>
-     <widget class="QWidget" name="launch_tab">
-      <property name="sizePolicy">
-       <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
-        <horstretch>0</horstretch>
-        <verstretch>0</verstretch>
-       </sizepolicy>
-      </property>
-      <attribute name="title">
-       <string>Launch and Inject</string>
-      </attribute>
-      <attribute name="toolTip">
-       <string>Select an executable to launch as a child process and inject into</string>
-      </attribute>
-      <layout class="QHBoxLayout" name="horizontalLayout_2">
+     <widget class="QWidget" name="attach_inject_page">
+      <layout class="QVBoxLayout" name="verticalLayout_6">
+       <property name="spacing">
+        <number>8</number>
+       </property>
+       <property name="leftMargin">
+        <number>0</number>
+       </property>
+       <property name="topMargin">
+        <number>0</number>
+       </property>
+       <property name="rightMargin">
+        <number>0</number>
+       </property>
+       <property name="bottomMargin">
+        <number>0</number>
+       </property>
        <item>
-        <widget class="QLineEdit" name="target_path_edit">
-         <property name="sizePolicy">
-          <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
-           <horstretch>0</horstretch>
-           <verstretch>0</verstretch>
-          </sizepolicy>
+        <widget class="QGroupBox" name="target_gbox">
+         <property name="title">
+          <string>Target</string>
          </property>
-         <property name="toolTip">
-          <string>The path to target executable that dnject will launch</string>
+         <property name="flat">
+          <bool>false</bool>
          </property>
-         <property name="placeholderText">
-          <string>/usr/bin/xclock</string>
+         <property name="checkable">
+          <bool>false</bool>
          </property>
+         <layout class="QGridLayout" name="target_gbox_layout">
+          <property name="sizeConstraint">
+           <enum>QLayout::SetMinimumSize</enum>
+          </property>
+          <property name="topMargin">
+           <number>8</number>
+          </property>
+          <property name="bottomMargin">
+           <number>8</number>
+          </property>
+          <item row="2" column="1">
+           <widget class="QLabel" name="t_user">
+            <property name="text">
+             <string>Owner:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="0">
+           <widget class="QLabel" name="t_pid">
+            <property name="text">
+             <string>PID:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="1">
+           <widget class="QLabel" name="t_type">
+            <property name="text">
+             <string>Type:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="0" colspan="2">
+           <widget class="QLabel" name="t_has_perms">
+            <property name="toolTip">
+             <string>UI Placeholder: elaborate on status here</string>
+            </property>
+            <property name="text">
+             <string>Can Attach:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="0">
+           <widget class="QLabel" name="t_exe">
+            <property name="text">
+             <string>Executable:</string>
+            </property>
+            <property name="wordWrap">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="6" column="0" colspan="2">
+           <layout class="QHBoxLayout" name="t_actions">
+            <item>
+             <widget class="QPushButton" name="copy_or_launch_button">
+              <property name="toolTip">
+               <string>Copy target process information to Launch page</string>
+              </property>
+              <property name="text">
+               <string>Copy to Launch</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="t_actions_spacer">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>0</width>
+                <height>0</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QPushButton" name="kill_button">
+              <property name="enabled">
+               <bool>false</bool>
+              </property>
+              <property name="sizePolicy">
+               <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+                <horstretch>0</horstretch>
+                <verstretch>0</verstretch>
+               </sizepolicy>
+              </property>
+              <property name="toolTip">
+               <string>(violently)</string>
+              </property>
+              <property name="text">
+               <string>Kill</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="attach_button">
+              <property name="sizePolicy">
+               <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+                <horstretch>0</horstretch>
+                <verstretch>0</verstretch>
+               </sizepolicy>
+              </property>
+              <property name="toolTip">
+               <string>Attempt to gain control of the process. This can involve privelege elevation depending on the platform and target.</string>
+              </property>
+              <property name="text">
+               <string>Attach</string>
+              </property>
+              <property name="autoDefault">
+               <bool>true</bool>
+              </property>
+              <property name="default">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item row="1" column="0">
+           <widget class="QLabel" name="t_name">
+            <property name="text">
+             <string>Name:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QLabel" name="t_status">
+            <property name="text">
+             <string>Status:</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
         </widget>
        </item>
        <item>
-        <widget class="QPushButton" name="target_pick">
-         <property name="toolTip">
-          <string>Open file picker to select target executable</string>
+        <widget class="QGroupBox" name="lib_list_gbox">
+         <property name="enabled">
+          <bool>false</bool>
          </property>
+         <property name="title">
+          <string>Inject List</string>
+         </property>
+         <property name="alignment">
+          <set>Qt::AlignLeading|Qt::AlignLeft|Qt::AlignVCenter</set>
+         </property>
+         <layout class="QVBoxLayout" name="lib_list_gbox_layout">
+          <property name="spacing">
+           <number>5</number>
+          </property>
+          <property name="sizeConstraint">
+           <enum>QLayout::SetMinimumSize</enum>
+          </property>
+          <property name="topMargin">
+           <number>8</number>
+          </property>
+          <property name="bottomMargin">
+           <number>3</number>
+          </property>
+          <item>
+           <layout class="QGridLayout" name="lib_list_layout">
+            <property name="verticalSpacing">
+             <number>3</number>
+            </property>
+            <item row="0" column="0" rowspan="4">
+             <widget class="QListWidget" name="lib_list">
+              <property name="toolTip">
+               <string>List of libraries to inject to target.
+Drag drag to reorder and drop files to add them.</string>
+              </property>
+              <property name="styleSheet">
+               <string notr="true">background-color: rgba(0,0,0,0)</string>
+              </property>
+              <property name="editTriggers">
+               <set>QAbstractItemView::DoubleClicked|QAbstractItemView::EditKeyPressed|QAbstractItemView::SelectedClicked</set>
+              </property>
+              <property name="dragEnabled">
+               <bool>true</bool>
+              </property>
+              <property name="dragDropMode">
+               <enum>QAbstractItemView::InternalMove</enum>
+              </property>
+              <property name="defaultDropAction">
+               <enum>Qt::LinkAction</enum>
+              </property>
+              <property name="alternatingRowColors">
+               <bool>true</bool>
+              </property>
+              <property name="movement">
+               <enum>QListView::Free</enum>
+              </property>
+             </widget>
+            </item>
+            <item row="3" column="1">
+             <widget class="QToolButton" name="lib_del">
+              <property name="enabled">
+               <bool>false</bool>
+              </property>
+              <property name="sizePolicy">
+               <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+                <horstretch>0</horstretch>
+                <verstretch>0</verstretch>
+               </sizepolicy>
+              </property>
+              <property name="toolTip">
+               <string>Remove library from injection list</string>
+              </property>
+              <property name="text">
+               <string>-</string>
+              </property>
+             </widget>
+            </item>
+            <item row="0" column="1">
+             <widget class="QToolButton" name="lib_add">
+              <property name="sizePolicy">
+               <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+                <horstretch>0</horstretch>
+                <verstretch>0</verstretch>
+               </sizepolicy>
+              </property>
+              <property name="toolTip">
+               <string>Add manual entry to injection list</string>
+              </property>
+              <property name="text">
+               <string>+</string>
+              </property>
+              <property name="icon">
+               <iconset theme="list-add">
+                <normaloff>.</normaloff>.</iconset>
+              </property>
+              <property name="toolButtonStyle">
+               <enum>Qt::ToolButtonTextOnly</enum>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="1">
+             <widget class="QToolButton" name="lib_pick">
+              <property name="sizePolicy">
+               <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+                <horstretch>0</horstretch>
+                <verstretch>0</verstretch>
+               </sizepolicy>
+              </property>
+              <property name="toolTip">
+               <string>Open file picker to add library to injection list</string>
+              </property>
+              <property name="text">
+               <string>...</string>
+              </property>
+              <property name="icon">
+               <iconset theme="folder-open">
+                <normaloff>.</normaloff>.</iconset>
+              </property>
+             </widget>
+            </item>
+            <item row="2" column="1">
+             <widget class="QToolButton" name="lib_move">
+              <property name="enabled">
+               <bool>false</bool>
+              </property>
+              <property name="sizePolicy">
+               <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+                <horstretch>0</horstretch>
+                <verstretch>0</verstretch>
+               </sizepolicy>
+              </property>
+              <property name="toolTip">
+               <string>Move library upwards in injection list</string>
+              </property>
+              <property name="text">
+               <string>^</string>
+              </property>
+              <property name="icon">
+               <iconset theme="go-up">
+                <normaloff>.</normaloff>.</iconset>
+              </property>
+             </widget>
+            </item>
+            <item row="0" column="0" rowspan="4">
+             <widget class="QLabel" name="lib_drag_label">
+              <property name="text">
+               <string>Drop libraries here to add</string>
+              </property>
+              <property name="alignment">
+               <set>Qt::AlignCenter</set>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="inject_btn_layout">
+            <item>
+             <spacer name="inject_btn_spacer">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>0</width>
+                <height>0</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QPushButton" name="inject_button">
+              <property name="enabled">
+               <bool>false</bool>
+              </property>
+              <property name="text">
+               <string>Inject</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+         </layout>
         </widget>
+       </item>
+       <item>
+        <widget class="QGroupBox" name="module_list_gbox">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <property name="title">
+          <string>Injected Modules</string>
+         </property>
+         <layout class="QVBoxLayout" name="verticalLayout_7">
+          <property name="spacing">
+           <number>5</number>
+          </property>
+          <property name="sizeConstraint">
+           <enum>QLayout::SetMinimumSize</enum>
+          </property>
+          <property name="topMargin">
+           <number>8</number>
+          </property>
+          <property name="bottomMargin">
+           <number>3</number>
+          </property>
+          <item>
+           <widget class="QTreeWidget" name="module_list">
+            <property name="editTriggers">
+             <set>QAbstractItemView::NoEditTriggers</set>
+            </property>
+            <property name="showDropIndicator" stdset="0">
+             <bool>false</bool>
+            </property>
+            <property name="alternatingRowColors">
+             <bool>true</bool>
+            </property>
+            <property name="rootIsDecorated">
+             <bool>false</bool>
+            </property>
+            <property name="uniformRowHeights">
+             <bool>true</bool>
+            </property>
+            <property name="sortingEnabled">
+             <bool>true</bool>
+            </property>
+            <property name="headerHidden">
+             <bool>false</bool>
+            </property>
+            <attribute name="headerDefaultSectionSize">
+             <number>50</number>
+            </attribute>
+            <column>
+             <property name="text">
+              <string/>
+             </property>
+            </column>
+            <column>
+             <property name="text">
+              <string>File</string>
+             </property>
+            </column>
+            <column>
+             <property name="text">
+              <string>Handle</string>
+             </property>
+            </column>
+            <item>
+             <property name="text">
+              <string>New Item</string>
+             </property>
+             <property name="text">
+              <string>UI Test lib</string>
+             </property>
+             <property name="text">
+              <string>0x000</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>New Item</string>
+             </property>
+             <property name="text">
+              <string>2</string>
+             </property>
+             <property name="text">
+              <string>3</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="eject_btn_layout">
+            <item>
+             <spacer name="eject_spacer">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>0</width>
+                <height>0</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QPushButton" name="eject_button">
+              <property name="enabled">
+               <bool>false</bool>
+              </property>
+              <property name="text">
+               <string>Eject</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="return_btn_layout">
+         <item>
+          <widget class="QPushButton" name="return_button">
+           <property name="text">
+            <string>Back</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <spacer name="horizontalSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>0</width>
+             <height>0</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+        </layout>
        </item>
       </layout>
      </widget>
-    </widget>
-   </item>
-   <item>
-    <widget class="QGroupBox" name="wine_mode_box">
-     <property name="sizePolicy">
-      <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
-       <horstretch>0</horstretch>
-       <verstretch>0</verstretch>
-      </sizepolicy>
-     </property>
-     <property name="title">
-      <string/>
-     </property>
-     <layout class="QVBoxLayout" name="verticalLayout_4">
-      <item>
-       <widget class="QCheckBox" name="wine_check">
-        <property name="toolTip">
-         <string>Wine Mode filters processes to those in wine environments, and injects libraries using win32 APIs rather than linux methods.
-Linux Only.</string>
-        </property>
-        <property name="text">
-         <string>Wine Mode</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <layout class="QHBoxLayout" name="wine_prefix_layout">
-        <item>
-         <widget class="QLabel" name="wine_prefix_label">
-          <property name="text">
-           <string>Prefix</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QComboBox" name="wine_prefix">
-          <property name="enabled">
-           <bool>false</bool>
-          </property>
-          <property name="sizePolicy">
-           <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
-            <horstretch>0</horstretch>
-            <verstretch>0</verstretch>
-           </sizepolicy>
-          </property>
-          <property name="toolTip">
-           <string>The wine prefix that dnject will run the win32 injection in</string>
-          </property>
-          <property name="editable">
-           <bool>true</bool>
-          </property>
-          <property name="insertPolicy">
-           <enum>QComboBox::InsertAtTop</enum>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-      <item>
-       <layout class="QHBoxLayout" name="wine_loc_layout">
-        <item>
-         <widget class="QLabel" name="wine_loc_label">
-          <property name="text">
-           <string>Wine Binary</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QComboBox" name="wine_loc">
-          <property name="enabled">
-           <bool>false</bool>
-          </property>
-          <property name="sizePolicy">
-           <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
-            <horstretch>0</horstretch>
-            <verstretch>0</verstretch>
-           </sizepolicy>
-          </property>
-          <property name="toolTip">
-           <string>The wine executable that dnject will use to run the win32 injection</string>
-          </property>
-          <property name="editable">
-           <bool>true</bool>
-          </property>
-          <property name="insertPolicy">
-           <enum>QComboBox::InsertAtTop</enum>
-          </property>
-          <property name="duplicatesEnabled">
-           <bool>true</bool>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
-    <widget class="QGroupBox" name="lib_list_gbox">
-     <property name="sizePolicy">
-      <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
-       <horstretch>0</horstretch>
-       <verstretch>2</verstretch>
-      </sizepolicy>
-     </property>
-     <property name="title">
-      <string/>
-     </property>
-     <property name="alignment">
-      <set>Qt::AlignCenter</set>
-     </property>
-     <layout class="QHBoxLayout" name="horizontalLayout">
-      <item>
-       <layout class="QGridLayout" name="lib_list_layout">
-        <item row="0" column="0">
-         <widget class="QLabel" name="lib_drag_label">
-          <property name="text">
-           <string>Drop libraries here to add</string>
-          </property>
-          <property name="alignment">
-           <set>Qt::AlignCenter</set>
-          </property>
-         </widget>
-        </item>
-        <item row="0" column="0">
-         <widget class="QListWidget" name="lib_list">
-          <property name="toolTip">
-           <string>List of libraries to inject to target.
-Drag drag to reorder and drop files to add them.</string>
-          </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgba(0,0,0,0)</string>
-          </property>
-          <property name="editTriggers">
-           <set>QAbstractItemView::DoubleClicked|QAbstractItemView::EditKeyPressed|QAbstractItemView::SelectedClicked</set>
-          </property>
-          <property name="dragEnabled">
-           <bool>true</bool>
-          </property>
-          <property name="dragDropMode">
-           <enum>QAbstractItemView::InternalMove</enum>
-          </property>
-          <property name="defaultDropAction">
-           <enum>Qt::LinkAction</enum>
-          </property>
-          <property name="alternatingRowColors">
-           <bool>true</bool>
-          </property>
-          <property name="movement">
-           <enum>QListView::Free</enum>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-      <item>
-       <layout class="QVBoxLayout" name="lib_button_layout">
-        <item>
-         <widget class="QToolButton" name="lib_add">
-          <property name="sizePolicy">
-           <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-            <horstretch>0</horstretch>
-            <verstretch>0</verstretch>
-           </sizepolicy>
-          </property>
-          <property name="toolTip">
-           <string>Add manual entry to injection list</string>
-          </property>
-          <property name="text">
-           <string>+</string>
-          </property>
-          <property name="icon">
-           <iconset theme="list-add">
-            <normaloff>.</normaloff>.</iconset>
-          </property>
-          <property name="toolButtonStyle">
-           <enum>Qt::ToolButtonTextOnly</enum>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QToolButton" name="lib_pick">
-          <property name="sizePolicy">
-           <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-            <horstretch>0</horstretch>
-            <verstretch>0</verstretch>
-           </sizepolicy>
-          </property>
-          <property name="toolTip">
-           <string>Open file picker to add library to injection list</string>
-          </property>
-          <property name="text">
-           <string>...</string>
-          </property>
-          <property name="icon">
-           <iconset theme="folder-open">
-            <normaloff>.</normaloff>.</iconset>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QToolButton" name="lib_move">
-          <property name="sizePolicy">
-           <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-            <horstretch>0</horstretch>
-            <verstretch>0</verstretch>
-           </sizepolicy>
-          </property>
-          <property name="toolTip">
-           <string>Move library up in injection list</string>
-          </property>
-          <property name="text">
-           <string>^</string>
-          </property>
-          <property name="icon">
-           <iconset theme="go-up">
-            <normaloff>.</normaloff>.</iconset>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QToolButton" name="lib_del">
-          <property name="sizePolicy">
-           <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-            <horstretch>0</horstretch>
-            <verstretch>0</verstretch>
-           </sizepolicy>
-          </property>
-          <property name="toolTip">
-           <string>Remove library from injection list</string>
-          </property>
-          <property name="text">
-           <string>-</string>
-          </property>
-          <property name="icon">
-           <iconset theme="list-remove">
-            <normaloff>.</normaloff>.</iconset>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-     </layout>
     </widget>
    </item>
    <item>
@@ -483,28 +1048,25 @@ Drag drag to reorder and drop files to add them.</string>
       </widget>
      </item>
      <item>
+      <spacer name="horizontalSpacer_2">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>0</width>
+         <height>0</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
       <widget class="QCheckBox" name="quit_done_check">
        <property name="toolTip">
         <string>Close dnject if all libraries are sucessfully injected</string>
        </property>
        <property name="text">
-        <string>Quit on Success</string>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="QPushButton" name="inject">
-       <property name="sizePolicy">
-        <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-         <horstretch>0</horstretch>
-         <verstretch>0</verstretch>
-        </sizepolicy>
-       </property>
-       <property name="toolTip">
-        <string>Injects added libraries to the target process, or starts the target executable with the added libaries injected</string>
-       </property>
-       <property name="text">
-        <string>Inject</string>
+        <string>Quit on Inject</string>
        </property>
       </widget>
      </item>
@@ -515,11 +1077,14 @@ Drag drag to reorder and drop files to add them.</string>
      <property name="sizePolicy">
       <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
        <horstretch>0</horstretch>
-       <verstretch>2</verstretch>
+       <verstretch>0</verstretch>
       </sizepolicy>
      </property>
      <property name="visible">
       <bool>false</bool>
+     </property>
+     <property name="styleSheet">
+      <string notr="true">background-color: rgba(255,255,255,255)</string>
      </property>
      <property name="readOnly">
       <bool>true</bool>

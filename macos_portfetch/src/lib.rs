@@ -21,7 +21,7 @@
 //!
 //! Portfetch launches a child process which is codesigned on-the-fly to have the needed entitlements
 //! to call `task_for_pid`, and optionally elevates its privileges using native macOS escalation
-//! dialogues. This means that when used the end-user has administrator access, a portfetch-using
+//! dialogs. This means that when used the end-user has administrator access, a portfetch-using
 //! process can get the task port of any process except those that are both hardened and without
 //! `get-task-allow`.
 //!
