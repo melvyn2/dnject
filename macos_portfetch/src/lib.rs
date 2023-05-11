@@ -2,21 +2,21 @@
 //! Portfetch serves to get a foreign process's Mach task port on Darwin systems. The `task_for_pid`
 //! mach trap is subject to many restrictions on modern macOS, which portfetch helps navigate.
 //!
-//! When System Integrity Protection's Debugging Protection is disabled, only the same-or-0-uid
+//! When System Integrity Protection's Debugging Protection is disabled, only the same-or-0-euid
 //! restriction is applied, but this is not the default configuration and toggling the option
 //! involves a trip to recovery mode, which is not ideal.
 //!
 //! The following table illustrates the restrictions of the call in a full-SIP enviornment,
 //! based on the caller and target's code signature:
 //!
-//! |                           | Bare | UID 0 | Debugger Entitlement | Debugger + UID 0 | Platform entitlement + UID 0 |
-//! |---------------------------|------|-------|----------------------|------------------|------------------------------|
-//! | Bare                      | FAIL | OK    | OK                   | OK               | OK                           |
-//! | GT Allow Entitlement      | OK   | OK    | OK                   | OK               | OK                           |
-//! | Hardened/Embedded Runtime | FAIL | FAIL  | FAIL                 | FAIL             | OK                           |
-//! | Runtime + GT Allow        | FAIL | FAIL  | OK                   | OK               | OK                           |
+//! |                      | Bare | EUID 0 | Debugger Entitlement | Debugger + EUID 0 | Platform entitlement + EUID 0 |
+//! |----------------------|------|--------|----------------------|-------------------|-------------------------------|
+//! | Bare                 | FAIL | OK     | OK                   | OK                | OK                            |
+//! | GT Allow Entitlement | OK   | OK     | OK                   | OK                | OK                            |
+//! | Hardened Runtime     | FAIL | FAIL   | FAIL                 | FAIL              | OK                            |
+//! | Runtime + GT Allow   | FAIL | FAIL   | OK                   | OK                | OK                            |
 //!
-//! When the target is running in a different UID than the caller, the caller must have UID 0,
+//! When the target is running in a different EUID than the caller, the caller must have UID 0,
 //! on top of the restrictions shown above.
 //!
 //! Portfetch launches a child process which is codesigned on-the-fly to have the needed entitlements
@@ -29,8 +29,8 @@
 //! The vulnerability allows non-apple code signatures, including ad-hoc signatures, to include
 //! apple-private entitlements. Of interest are the `platform-binary` and
 //! `com.apple.system-task-ports.control` entitlements, both of which only apply to UID 0 processes.
-//! Both entitlements allow access to any task port on the system, including of hardened/embedded
-//! binaries, even with full SIP. The `exploit-CVE-2022-42855` crate feature, enabling the
+//! Both entitlements allow access to any task port on the system, including of hardened binaries,
+//! even with full SIP. The `exploit-CVE-2022-42855` crate feature, enabling the
 //! [get_port_admin_exploit] function which allows using the exploit to get the task port.
 
 use std::collections::hash_map::DefaultHasher;
@@ -39,6 +39,7 @@ use std::fs;
 use std::fs::File;
 use std::hash::Hasher;
 use std::io::{ErrorKind, Read, Write};
+use std::ops::Deref;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
@@ -47,7 +48,7 @@ use std::process::{Command, Stdio};
 use std::ptr::{null, null_mut};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use libc::{c_char, fileno, pid_t};
+use libc::{c_char, fileno, geteuid, pid_t};
 
 use mach2::kern_return::{KERN_FAILURE, KERN_SUCCESS};
 use mach2::port::mach_port_t;
@@ -58,7 +59,8 @@ use security_framework_sys::authorization::{
     AuthorizationRef,
 };
 
-use apple_codesign::{CodeSignatureFlags, SettingsScope, SigningSettings, UnifiedSigner};
+use apple_codesign::{CodeSignatureFlags, MachFile, SettingsScope, SigningSettings, UnifiedSigner};
+use sysinfo::{Pid, PidExt, ProcessExt, ProcessRefreshKind, RefreshKind, System, SystemExt};
 
 use mach_util::mach_portal::MachPortal;
 use mach_util::traps::pid_for_task;
@@ -341,4 +343,73 @@ fn create_bin(bin: &[u8], ent: Option<&str>, hardened: bool) -> Result<TempFile,
     }
 
     Ok(TempFile(out_bin))
+}
+
+/// Represents a process's `task_for_pid` related security details: whether it is signed with the
+/// hardened runtime, whether it is signed with the `get-task-allow` entitlement, and whether it has
+/// the same euid as the probing process (will always be true if probing process is EUID 0)
+pub struct ProbeInfo {
+    pub hardened: bool,
+    pub get_task_allow: bool,
+    pub same_euid: bool,
+}
+
+impl ProbeInfo {
+    /// Probes a PID and returns the relevant security details. This is not a cheap operation, and
+    /// should not be called more than once per PID as the results cannot change in a process's lifetime.
+    pub fn new(target: pid_t) -> Result<Self, Box<dyn std::error::Error>> {
+        let system = System::new_with_specifics(
+            RefreshKind::new().with_processes(ProcessRefreshKind::new().with_user()),
+        );
+        let process = system
+            .process(Pid::from_u32(target as u32))
+            .ok_or(std::io::Error::new(
+                ErrorKind::NotFound,
+                format!("pid {} does not exist", target),
+            ))?;
+
+        // No matching rust call?
+        let cur_euid = unsafe { geteuid() };
+
+        let same_euid = cur_euid == 0
+            || &cur_euid
+                == process
+                    .effective_user_id()
+                    .ok_or(std::io::Error::new(
+                        ErrorKind::PermissionDenied,
+                        "could not fetch target euid",
+                    ))?
+                    .deref();
+
+        let exe_file = fs::read(process.exe())?;
+        let exe = MachFile::parse(&exe_file)?;
+        // TODO match correct arch instead of first
+        let exe_data = exe.nth_macho(0)?;
+        let cs = match exe_data.code_signature()? {
+            None => {
+                return Ok(Self {
+                    same_euid,
+                    get_task_allow: false,
+                    hardened: false,
+                })
+            }
+            Some(cs) => cs,
+        };
+        let get_task_allow = match cs.entitlements()? {
+            None => false,
+            // Could be tricked by get-task-allow=false, but who would do that
+            Some(ent) => ent.as_str().contains("get-task-allow"),
+        };
+
+        let hardened = cs
+            .code_directory()?
+            .map(|blob| blob.flags & CodeSignatureFlags::RUNTIME == CodeSignatureFlags::RUNTIME)
+            .unwrap_or(false);
+
+        Ok(Self {
+            same_euid,
+            get_task_allow,
+            hardened,
+        })
+    }
 }

@@ -161,10 +161,10 @@ fn ensure_matching_arch(target: pid_t) -> Result<(), std::io::Error> {
 ///       is required to successfully use the [task_for_pid] trap:
 ///       - SIP debugging protection is disabled
 ///       - the injecting process is ran as root and the target does not have the "hardened runtime"
-///         or "embedded" codesigning flags
+///         codesigning flag
 ///       - the target is signed with `get-task-allow`
-///         - When injecting into a target with the "hardened runtime" or "embedded" codesigning
-///           flags, the host the host must also have `com.apple.security.cs.debugger`
+///         - When injecting into a target with the "hardened runtime" codesigning flag,
+///           the host must also have `com.apple.security.cs.debugger`
 ///           (`task_for_pid-allow` on iOS)
 ///       - the host has the `com.apple.system-task-ports` or `platform-application` private
 ///         entitlements (only possible with exploit)
@@ -174,7 +174,7 @@ fn ensure_matching_arch(target: pid_t) -> Result<(), std::io::Error> {
 ///       `com.apple.security.cs.allow-jit` are *not* needed
 /// 3. Loading
 ///     - The same restrictions on injected module loading apply as with normal module loading.
-///       This means that when the target has the "hardened runtime" or "embedded" codesigning flags,
+///       This means that when the target has the "hardened runtime" codesigning flag,
 ///       it must have the `com.apple.security.cs.disable-library-validation` entitlement unless:
 ///         - the injected dylib is signed with the same Team ID as the target library
 ///         - the injected dylib is signed as a platform binary (only possible with exploit)

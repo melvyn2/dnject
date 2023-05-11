@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 use log::{Level, LevelFilter, Log, Metadata, Record};
 
 use cpp_core::{CppBox, Ptr, Ref, StaticUpcast};
+use libc::pid_t;
 
 use qt_core::{
     q_event, qs, slot, ConnectionType, DropAction, GlobalColor, QBox, QEvent, QObject, QPtr,
@@ -297,7 +298,7 @@ impl MainWindow {
         self.ui.proc_table.clear();
 
         let ownership_filter = self.ui.proc_owner_filter.is_checked();
-        let wine_mode = self.ui.wine_mode_gbox.is_checked();
+        // let wine_mode = self.ui.wine_mode_gbox.is_checked();
 
         let mut system = self.system_data.borrow_mut();
         system.refresh_specifics(
@@ -322,7 +323,7 @@ impl MainWindow {
             proc_item.set_data(1, 0, &QVariant::from_uint(pid.as_u32()));
             proc_item.set_text(
                 2,
-                &match proc.user_id() {
+                &match proc.effective_user_id() {
                     Some(uid) => match system.get_user_by_id(uid) {
                         Some(user) => qs(user.name()),
                         None => QString::number_uint(*uid.deref()),
@@ -400,25 +401,80 @@ impl MainWindow {
                         .with_processes(ProcessRefreshKind::new().with_user())
                         .with_users_list(),
                 );
-                let proc_exists = system.process(Pid::from_u32(pid)).is_some();
-                drop(system);
+                let proc = system.process(Pid::from_u32(pid));
 
-                if !proc_exists {
+                if proc.is_none() {
                     log::info!("Could not find process {}", pid);
                     QMessageBox::warning_q_widget2_q_string(
                         &self.ui.widget,
                         &qs("Process not found"),
                         &qs("The process could not be located. It may have exited after the most recent refresh."),
                     );
+                    drop(system);
                     self.on_refresh_clicked();
                     return;
                 }
 
+                let proc = proc.unwrap();
+
                 self.target_process.replace(Some(Pid::from_u32(pid)));
 
                 self.ui.main_stack.set_current_index(1);
+                self.ui.t_pid.set_text(&qs(format!("PID: {}", proc.pid())));
+                self.ui
+                    .t_exe
+                    .set_text(&qs(format!("Executable: {}", proc.exe().to_string_lossy())));
+                self.ui
+                    .t_exe
+                    .set_tool_tip(&qs(proc.exe().to_string_lossy()));
+
+                let user = match proc.effective_user_id() {
+                    Some(uid) => match system.get_user_by_id(uid) {
+                        Some(user) => format!("{} ({})", user.name(), uid.to_string()),
+                        None => uid.to_string(),
+                    },
+                    None => "(unknown)".to_string(),
+                };
+
+                self.ui.t_user.set_text(&qs(format!("Owner: {}", user)));
+                // TODO check target arch & wine
+                // self.ui.t_type.set_text(&qs());
+                // TODO check target euid & ents (on macos)
+                #[cfg(target_os = "macos")]
+                let status = {
+                    match macos_portfetch::ProbeInfo::new(pid as pid_t) {
+                        Err(e) => format!("Unknown ({})", e),
+                        Ok(sec) => match (sec.same_euid, sec.hardened, sec.get_task_allow) {
+                            (_, true, false) => {
+                                if cfg!(feature = "macos-ent-bypass") {
+                                    "Admin Required (Hardened + exploit)"
+                                } else {
+                                    "No Access (Hardened)"
+                                }
+                            }
+                            (true, true, true) => "OK (Hardened + allow)",
+                            (false, true, true) => "Admin Required (Different user)",
+                            (false, _, _) => "Admin Required (Different user)",
+                            (true, false, false) => "OK (Not protected)",
+                            (true, false, true) => "OK (Explicit allow)",
+                        }
+                        .to_string(),
+                    }
+                };
+                #[cfg(not(target_os = "macos"))]
+                let status = "unknown";
+                self.ui
+                    .t_has_perms
+                    .set_text(&qs(format!("Status: {}", status)));
+
+                self.ui
+                    .copy_or_launch_button
+                    .set_text(&qs("Copy to Launch"));
+
+                drop(system);
+
                 self.refresh_target_info();
-                log::warn!("Process type and perms checking not impl")
+                log::warn!("Process type check not impl")
             }
             1 => {
                 dbg!(self.ui.exe_path_edit.current_text().to_std_string());
@@ -429,6 +485,8 @@ impl MainWindow {
                 self.ui
                     .cwd_path_edit
                     .insert_item_int_q_string(0, &self.ui.cwd_path_edit.current_text());
+
+                self.ui.copy_or_launch_button.set_text(&qs("Launch"));
                 log::error!("launch probe handler unimpl")
             }
             other => log::error!("unexpected target tab index {}", other),
@@ -450,7 +508,7 @@ impl MainWindow {
 
         system.refresh_specifics(
             RefreshKind::new()
-                .with_processes(ProcessRefreshKind::new().with_user())
+                .with_processes(ProcessRefreshKind::new())
                 .with_users_list(),
         );
 
@@ -473,38 +531,6 @@ impl MainWindow {
             "Status: {}",
             proc.status().to_string().replace("Runnable", "Running")
         )));
-        self.ui.t_pid.set_text(&qs(format!("PID: {}", proc.pid())));
-        self.ui
-            .t_exe
-            .set_text(&qs(format!("Executable: {}", proc.exe().to_string_lossy())));
-        self.ui
-            .t_exe
-            .set_tool_tip(&qs(proc.exe().to_string_lossy()));
-
-        let user = match proc.user_id() {
-            Some(uid) => match system.get_user_by_id(uid) {
-                Some(user) => format!("{} ({})", user.name(), uid.to_string()),
-                None => uid.to_string(),
-            },
-            None => "(unknown)".to_string(),
-        };
-
-        self.ui.t_user.set_text(&qs(format!("Owner: {}", user)));
-        // TODO check target arch & wine
-        // self.ui.t_type.set_text(&qs());
-        // TODO check target uid & ents (on macos)
-        // self.ui.t_has_perms.set_text(&qs());
-
-        self.ui
-            .copy_or_launch_button
-            .set_text(&qs(match self.ui.target_tabs.current_index() {
-                0 => "Copy to Launch",
-                1 => "Launch",
-                other => {
-                    log::error!("unexpected target tab index {}", other);
-                    return;
-                }
-            }));
     }
 
     #[slot(SlotOfInt)]

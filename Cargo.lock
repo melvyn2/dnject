@@ -1324,6 +1324,7 @@ version = "0.1.0"
 dependencies = [
  "cpp_core",
  "injector",
+ "libc",
  "log",
  "macos_portfetch",
  "qt_core",
@@ -2121,6 +2122,7 @@ dependencies = [
  "macos_portfetch_internal",
  "nonblock",
  "security-framework-sys",
+ "sysinfo",
 ]
 
 [[package]]

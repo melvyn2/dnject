@@ -7,9 +7,13 @@ publish = false
 [workspace]
 members = ["injector", "injector/testlib", "mach_util", "macos_portfetch", "macos_portfetch/macos_portfetch_internal"]
 
+[features]
+macos-ent-bypass = [ "macos_portfetch/exploit-CVE-2022-42855" ]  # No-op on non-darwin
+
 [dependencies]
 cpp_core = "0.6"
 log = "0.4"
+libc = "0.2"
 qt_core = "0.5"
 qt_gui = "0.5"
 qt_widgets = "0.5"

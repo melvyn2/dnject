@@ -12,7 +12,6 @@ required-features = ["env_logger"]
 # Until https://github.com/rust-lang/rfcs/pull/3374, leave env_logger as default dep and let consumers remove if desired
 default = ["wine", "env_logger"]
 wine = []  # No-op on non-unix
-macos-ent-bypass = []  # No-op on non-darwin
 test_broken = [ "spawn-task-port" ]  # Used to test broken methods
 
 [dependencies]
