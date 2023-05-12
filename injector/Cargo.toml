@@ -34,4 +34,5 @@ mach_util = { path = "../mach_util" }
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 # This crate is so comically bloated that it brings our dependency tree (cargo-tree) from 44 lines to 904!!!!!!!!! WTF!!
 # Thankfully we don't need it except for tests
-apple-codesign = { git = "https://github.com/melvyn2/apple-platform-rs.git" }
+apple-codesign = { git = "https://github.com/melvyn2/apple-platform-rs.git", default-features = false }
+macos_portfetch = { path = "../macos_portfetch" }

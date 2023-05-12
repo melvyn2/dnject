@@ -1,7 +1,10 @@
 #![feature(io_error_more)]
 #![cfg(target_os = "macos")]
 
-use apple_codesign::{CodeSignatureFlags, SettingsScope, SigningSettings, UnifiedSigner};
+// Actual test code for macos
+// `macos.rs` and `macos_hardened.rs` have the test-annotated functions, so that tests are ran
+// sequentially and in different binaries
+
 use std::collections::hash_map::DefaultHasher;
 use std::ffi::OsStr;
 use std::fs;
@@ -11,24 +14,18 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Once;
+use std::time::SystemTime;
 
 use libc::pid_t;
 
+use apple_codesign::{CodeSignatureFlags, SettingsScope, SigningSettings, UnifiedSigner};
+
 use injector::ProcHandle;
 
-// Why include and write to disk? CLion's remote running (for i686 mojave VMs) doesn't seem to
+// Why include and write to disk? CLion's remote running (such asfor i686 mojave VMs) doesn't seem to
 // account for bindeps, so doesn't copy them into the guest environment. We do it ourselves
 const TESTLIB: &[u8] = include_bytes!(env!("CARGO_CDYLIB_FILE_TESTLIB"));
 const TESTBIN: &[u8] = include_bytes!(env!("CARGO_BIN_FILE_TESTBIN"));
-
-const ENT_XML_INJECTOR: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>com.apple.security.cs.debugger</key>
-    <true/>
-</dict>
-</plist>"#;
 
 const ENT_XML_TARGET: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -62,10 +59,7 @@ fn logger_init() {
     })
 }
 
-// TODO make test binary signed with `com.apple.cs.security.debugger`
-#[test]
-#[ignore = "codesigning test binary not implemented"]
-fn test_inject_hardened() {
+pub fn test_inject_hardened() {
     logger_init();
 
     // Create target signed with get-task-allow entitlement
@@ -81,8 +75,12 @@ fn test_inject_hardened() {
     proc.stderr(Stdio::inherit());
     let mut child = proc.spawn().unwrap();
 
-    // Get handle by task_for_pid
-    let mut handle = ProcHandle::try_from(child.id() as pid_t).unwrap_or_else(|e| {
+    // Get handle by macos_portfetch
+    let port = macos_portfetch::get_port_signed(child.id() as pid_t).unwrap_or_else(|e| {
+        let _ = child.kill();
+        Err(e).unwrap()
+    });
+    let mut handle = ProcHandle::try_from(port).unwrap_or_else(|e| {
         let _ = child.kill();
         Err(e).unwrap()
     });
@@ -109,8 +107,7 @@ fn test_inject_hardened() {
     let _ = child.kill();
 }
 
-#[test]
-fn test_inject() {
+pub fn test_inject() {
     logger_init();
 
     // Create target signed with get-task-allow entitlement
@@ -188,10 +185,12 @@ fn create_bin(
     // Set ext to hash of inputs, to avoid collision with parallel tests
     let ext = {
         let mut ext_hasher = DefaultHasher::new();
-        if let Some(e) = ent {
-            ext_hasher.write(e.as_bytes());
-        }
-        ext_hasher.write_u8(hardened as u8);
+        ext_hasher.write_u128(
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap(),
+        );
         format!("injtest-{:x}", ext_hasher.finish())
     };
 

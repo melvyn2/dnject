@@ -14,7 +14,7 @@ nonblock = "0.2"
 mach2 = "0.4"
 security-framework-sys = "2.8"
 sysinfo = "0.29"
-apple-codesign = { git = "https://github.com/melvyn2/apple-platform-rs.git" }
+apple-codesign = { git = "https://github.com/melvyn2/apple-platform-rs.git", default-features = false }
 
 mach_util = { path = "../mach_util" }
 macos_portfetch_internal = { path = "macos_portfetch_internal", artifact = ["bin"], lib = true }

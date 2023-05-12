@@ -1,2 +1,5 @@
 [unstable]
 bindeps = true
+
+[target.'cfg(target_os = "macos")']
+runner = ".cargo/macos_cs_runner.sh"
