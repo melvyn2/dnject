@@ -2,8 +2,10 @@
 
 use std::cell::RefCell;
 use std::ffi::{c_int, CStr};
+use std::io::ErrorKind;
 use std::mem::transmute;
 use std::ops::Deref;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
@@ -13,9 +15,9 @@ use cpp_core::{CppBox, Ptr, Ref, StaticUpcast};
 use libc::pid_t;
 
 use qt_core::{
-    q_event, qs, slot, ConnectionType, DropAction, GlobalColor, QBox, QEvent, QObject, QPtr,
-    QString, QTimer, QVariant, SignalNoArgs, SignalOfQString, SlotNoArgs, SlotOfBool, SlotOfInt,
-    SlotOfQString,
+    q_event, qs, slot, ConnectionType, DropAction, GlobalColor, ItemFlag, QBox, QEvent, QObject,
+    QOperatingSystemVersion, QPtr, QString, QTimer, QVariant, SignalNoArgs, SignalOfQString,
+    SlotNoArgs, SlotOfBool, SlotOfInt, SlotOfQString,
 };
 use qt_core_custom_events::custom_event_filter::CustomEventFilter;
 use qt_gui::{QColor, QDragEnterEvent, QDropEvent};
@@ -29,22 +31,6 @@ use injector::ProcHandle;
 
 mod ui;
 use ui::MainUI;
-
-struct MainWindow {
-    ui: MainUI,
-    system_data: RefCell<System>,
-    wine_prefix_saved: RefCell<String>,
-    wine_loc_saved: RefCell<String>,
-    target_process: RefCell<Option<Pid>>,
-    target_handle: RefCell<Option<ProcHandle>>,
-    process_refresh_timer: RefCell<Option<QBox<QTimer>>>,
-}
-
-impl StaticUpcast<QObject> for MainWindow {
-    unsafe fn static_upcast(ptr: Ptr<Self>) -> Ptr<QObject> {
-        ptr.ui.widget.as_ptr().static_upcast()
-    }
-}
 
 #[derive(Debug)]
 struct TextEditLogger {
@@ -111,6 +97,22 @@ impl Log for TextEditLogger {
     fn flush(&self) {}
 }
 
+struct MainWindow {
+    ui: MainUI,
+    system_data: RefCell<System>,
+    wine_prefix_saved: RefCell<String>,
+    wine_loc_saved: RefCell<String>,
+    target_process: RefCell<Option<Pid>>,
+    target_handle: RefCell<Option<ProcHandle>>,
+    process_refresh_timer: RefCell<Option<QBox<QTimer>>>,
+}
+
+impl StaticUpcast<QObject> for MainWindow {
+    unsafe fn static_upcast(ptr: Ptr<Self>) -> Ptr<QObject> {
+        ptr.ui.main.as_ptr().static_upcast()
+    }
+}
+
 impl MainWindow {
     fn new() -> Rc<Self> {
         let new = Rc::new(Self {
@@ -146,7 +148,7 @@ impl MainWindow {
         timer.start_1a(1000);
         self.process_refresh_timer.replace(Some(timer));
 
-        self.ui.widget.show();
+        self.ui.main.show();
     }
 
     unsafe fn add_event_filters(self: &Rc<Self>) {
@@ -160,9 +162,9 @@ impl MainWindow {
         // Which only safe function pointers are
         unsafe {
             if event.type_() == q_event::Type::DragEnter {
-                log::trace!("received DragEnter event.");
+                log::trace!("received DragEnter event");
                 log::trace!(
-                    "Event parent object: {:?}",
+                    "event parent object: {:?}",
                     CStr::from_ptr(obj.meta_object().class_name())
                 );
                 // Transmute is safe because we check the event type
@@ -170,15 +172,17 @@ impl MainWindow {
                 let mime_data = drag_event.mime_data().text().to_std_string();
                 let urls: Vec<&str> = mime_data.lines().collect();
                 if drag_event.mime_data().has_urls()
-                    && !urls.iter().all(|url| url.is_empty() || url.ends_with('/'))
+                    && !urls
+                        .into_iter()
+                        .all(|url| url.is_empty() || url.ends_with('/'))
                 {
-                    log::trace!("event has valid data, accepting.");
+                    log::trace!("event has valid urls, accepting");
                     drag_event.set_drop_action(DropAction::LinkAction);
                     drag_event.accept();
                     return true;
                 }
             } else if event.type_() == q_event::Type::Drop {
-                log::trace!("received Drop event.");
+                log::trace!("received Drop event");
                 log::trace!(
                     "parent object: {:?}",
                     CStr::from_ptr(obj.meta_object().class_name())
@@ -188,8 +192,10 @@ impl MainWindow {
                 let mime_data = drop_event.mime_data().text().to_std_string();
                 let urls: Vec<&str> = mime_data.lines().collect();
                 let list_widget: &mut QListWidget = transmute(obj);
-                for file in urls.iter().filter(|f| !f.ends_with('/')) {
-                    list_widget.add_item_q_string(qs(file.replacen("file://", "", 1)).as_ref());
+                for file in urls.into_iter().filter(|f| !f.ends_with('/')) {
+                    list_widget.add_item_q_string(&qs(file.replacen("file://", "", 1)));
+                    let new_item = list_widget.item(list_widget.count() - 1);
+                    new_item.set_flags(new_item.flags() | ItemFlag::ItemIsEditable);
                 }
                 list_widget.set_current_row_1a(list_widget.count() - 1);
                 drop_event.set_drop_action(DropAction::LinkAction);
@@ -201,65 +207,56 @@ impl MainWindow {
     }
 
     unsafe fn bind_slots(self: &Rc<Self>) {
-        self.ui
-            .target_tabs
-            .current_changed()
-            .connect(&self.slot_on_tab_changed());
+        macro_rules! bind {
+            ($widget:ident, $signal:ident, $slot:ident) => {
+                // TODO remove slot_ prefix
+                self.ui.$widget.$signal().connect(&self.$slot());
+            };
+        }
 
-        self.ui
-            .proc_table
-            .item_selection_changed()
-            .connect(&self.slot_on_proc_table_selection());
-        self.ui
-            .proc_table
-            .item_double_clicked()
-            .connect(&self.slot_on_proc_table_item_double_clicked());
-        self.ui
-            .proc_owner_filter
-            .toggled()
-            .connect(&self.slot_on_refresh_clicked());
-        self.ui
-            .proc_refresh
-            .clicked()
-            .connect(&self.slot_on_refresh_clicked());
+        bind!(target_tabs, current_changed, slot_on_tab_changed);
 
-        self.ui
-            .exe_path_edit
-            .current_text_changed()
-            .connect(&self.slot_on_exe_text_updated());
+        bind!(
+            proc_table,
+            item_selection_changed,
+            slot_on_proc_table_selection
+        );
+        bind!(
+            proc_table,
+            item_selection_changed,
+            slot_on_proc_table_selection
+        );
+        bind!(
+            proc_table,
+            item_double_clicked,
+            slot_on_proc_table_item_double_clicked
+        );
+        bind!(proc_owner_filter, toggled, slot_on_refresh_clicked);
+        bind!(proc_refresh, clicked, slot_on_refresh_clicked);
 
-        self.ui
-            .wine_mode_gbox
-            .toggled()
-            .connect(&self.slot_on_wine_toggled());
+        bind!(
+            exe_path_edit,
+            current_text_changed,
+            slot_on_exe_text_updated
+        );
 
-        self.ui
-            .probe_button
-            .clicked()
-            .connect(&self.slot_on_probe_clicked());
+        bind!(wine_mode_gbox, toggled, slot_on_wine_toggled);
 
-        self.ui
-            .lib_list
-            .current_row_changed()
-            .connect(&self.slot_on_lib_changed());
-        self.ui.lib_add.clicked().connect(&self.slot_on_lib_add());
-        self.ui.lib_pick.clicked().connect(&self.slot_on_lib_pick());
-        self.ui.lib_move.clicked().connect(&self.slot_on_lib_move());
-        self.ui.lib_del.clicked().connect(&self.slot_on_lib_del());
-        self.ui
-            .inject_button
-            .clicked()
-            .connect(&self.slot_on_inject_clicked());
+        bind!(probe_button, clicked, slot_on_probe_clicked);
 
-        self.ui
-            .return_button
-            .clicked()
-            .connect(&self.slot_on_back_clicked());
+        bind!(kill_button, clicked, slot_on_kill_clicked);
+        bind!(attach_button, clicked, slot_on_attach_clicked);
 
-        self.ui
-            .log_check
-            .toggled()
-            .connect(&self.slot_on_log_toggled());
+        bind!(lib_list, current_row_changed, slot_on_lib_changed);
+        bind!(lib_add, clicked, slot_on_lib_add);
+        bind!(lib_pick, clicked, slot_on_lib_pick);
+        bind!(lib_move, clicked, slot_on_lib_move);
+        bind!(lib_del, clicked, slot_on_lib_del);
+        bind!(inject_button, clicked, slot_on_inject_clicked);
+
+        bind!(return_button, clicked, slot_on_back_clicked);
+
+        bind!(log_check, toggled, slot_on_log_toggled);
     }
 
     #[slot(SlotOfInt)]
@@ -389,6 +386,17 @@ impl MainWindow {
             .set_current_text(qs::<&str>(self.wine_loc_saved.borrow().as_ref()).as_ref());
     }
 
+    #[cfg(target_os = "macos")]
+    fn expl_available() -> bool {
+        let feat = cfg!(feature = "macos-ent-bypass");
+        let ver = unsafe { QOperatingSystemVersion::current() };
+        let ver_match = unsafe {
+            (ver.major_version() == 12) && (ver.minor_version() < 7)
+                || ((ver.minor_version() == 7) && ver.micro_version() < 2)
+        };
+        feat && ver_match
+    }
+
     #[slot(SlotNoArgs)]
     unsafe fn on_probe_clicked(self: &Rc<Self>) {
         match self.ui.target_tabs.current_index() {
@@ -406,7 +414,7 @@ impl MainWindow {
                 if proc.is_none() {
                     log::info!("Could not find process {}", pid);
                     QMessageBox::warning_q_widget2_q_string(
-                        &self.ui.widget,
+                        &self.ui.main,
                         &qs("Process not found"),
                         &qs("The process could not be located. It may have exited after the most recent refresh."),
                     );
@@ -418,6 +426,7 @@ impl MainWindow {
                 let proc = proc.unwrap();
 
                 self.target_process.replace(Some(Pid::from_u32(pid)));
+                self.ui.attach_button.set_enabled(true);
 
                 self.ui.main_stack.set_current_index(1);
                 self.ui.t_pid.set_text(&qs(format!("PID: {}", proc.pid())));
@@ -446,17 +455,16 @@ impl MainWindow {
                         Err(e) => format!("Unknown ({})", e),
                         Ok(sec) => match (sec.same_euid, sec.hardened, sec.get_task_allow) {
                             (_, true, false) => {
-                                if cfg!(feature = "macos-ent-bypass") {
+                                if Self::expl_available() {
                                     "Admin Required (Hardened + exploit)"
                                 } else {
                                     "No Access (Hardened)"
                                 }
                             }
-                            (true, true, true) => "OK (Hardened + allow)",
-                            (false, true, true) => "Admin Required (Different user)",
                             (false, _, _) => "Admin Required (Different user)",
-                            (true, false, false) => "OK (Not protected)",
+                            (true, true, true) => "OK (Hardened + allow)",
                             (true, false, true) => "OK (Explicit allow)",
+                            (true, false, false) => "OK (Not protected)",
                         }
                         .to_string(),
                     }
@@ -465,7 +473,7 @@ impl MainWindow {
                 let status = "unknown";
                 self.ui
                     .t_has_perms
-                    .set_text(&qs(format!("Status: {}", status)));
+                    .set_text(&qs(format!("Can Attach: {}", status)));
 
                 self.ui
                     .copy_or_launch_button
@@ -519,6 +527,7 @@ impl MainWindow {
                 self.ui.t_status.set_text(&qs("Status: Exited"));
                 // Don't keep refreshing because of PID reuse (fuck you apple)
                 self.target_process.replace(None);
+                self.ui.attach_button.set_enabled(false);
                 drop(system);
                 return;
             }
@@ -533,21 +542,95 @@ impl MainWindow {
         )));
     }
 
+    #[slot(SlotNoArgs)]
+    unsafe fn on_kill_clicked(self: &Rc<Self>) {
+        let handle = self.target_handle.replace(None);
+        handle.unwrap().kill();
+    }
+
+    // Wrap function to have single error handling branch
+    fn attach(self: &Rc<Self>) -> Result<ProcHandle, Box<dyn std::error::Error>> {
+        #[cfg(target_os = "macos")]
+        {
+            let status: String = unsafe { self.ui.t_has_perms.text() }.to_std_string();
+            let pid = self.target_process.borrow().unwrap().as_u32() as pid_t;
+            let port = if status.contains("No Access") {
+                return Err(Box::new(std::io::Error::new(
+                    ErrorKind::PermissionDenied,
+                    "process is hardened",
+                )));
+            } else if status.contains("Admin Required") {
+                if Self::expl_available() {
+                    #[allow(unreachable_code)]
+                    #[cfg(not(feature = "macos-ent-bypass"))]
+                    return unreachable!();
+                    #[cfg(feature = "macos-ent-bypass")]
+                    macos_portfetch::get_port_admin_exploit(pid)?
+                } else {
+                    macos_portfetch::get_port_signed_admin(pid)?
+                }
+            } else {
+                macos_portfetch::get_port_signed(pid)?
+            };
+            Ok(ProcHandle::try_from(port)?)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            log::error!("attach not impl for platform");
+            return;
+        }
+    }
+
+    #[slot(SlotNoArgs)]
+    unsafe fn on_attach_clicked(self: &Rc<Self>) {
+        let handle = match self.attach() {
+            Ok(p) => p,
+            Err(e) => {
+                QMessageBox::critical_q_widget2_q_string(
+                    &self.ui.main,
+                    &qs("Failed to attach to target"),
+                    &qs(format!(
+                        "The target process process could not be attached to: {}",
+                        e
+                    )),
+                );
+                return;
+            }
+        };
+        log::info!("Attached to process {}", handle.get_pid());
+        self.target_handle.replace(Some(handle));
+        self.ui.attach_button.set_enabled(false);
+        self.ui.kill_button.set_enabled(true);
+        self.ui.lib_list_gbox.set_enabled(true);
+        self.ui.t_has_perms.set_text(&qs("Successfully attached"));
+    }
+
     #[slot(SlotOfInt)]
-    unsafe fn on_lib_changed(self: &Rc<Self>, _: i32) {
+    unsafe fn on_lib_changed(self: &Rc<Self>, idx: i32) {
         if self.ui.lib_list.count() > 0 {
             self.ui
                 .lib_list
                 .set_style_sheet(qt_core::QString::new().as_ref());
+            self.ui.inject_button.set_enabled(true);
+            self.ui.lib_move.set_enabled(idx > 0);
+            self.ui.lib_del.set_enabled(idx >= 0);
+        } else {
+            self.ui
+                .lib_list
+                .set_style_sheet(&qs("background-color: rgba(0,0,0,0)"));
+            self.ui.inject_button.set_enabled(false);
+            self.ui.lib_move.set_enabled(false);
+            self.ui.lib_del.set_enabled(false);
         }
     }
     #[slot(SlotNoArgs)]
     unsafe fn on_lib_add(self: &Rc<Self>) {
         self.ui.lib_list.add_item_q_string(qs("").as_ref());
+        let new_item = self.ui.lib_list.item(self.ui.lib_list.count() - 1);
+        new_item.set_flags(new_item.flags() | ItemFlag::ItemIsEditable);
         self.ui
             .lib_list
             .set_current_row_1a(self.ui.lib_list.count() - 1);
-        log::error!("adding libs unimpl")
     }
     #[slot(SlotNoArgs)]
     unsafe fn on_lib_pick(self: &Rc<Self>) {
@@ -570,7 +653,21 @@ impl MainWindow {
 
     #[slot(SlotNoArgs)]
     unsafe fn on_inject_clicked(self: &Rc<Self>) {
-        dbg!("inject clicked");
+        let mut handle_ref = self.target_handle.borrow_mut();
+        let handle = handle_ref.as_mut().unwrap();
+        let paths: Vec<PathBuf> = (0..self.ui.lib_list.count())
+            .map(|idx| PathBuf::from(self.ui.lib_list.item(idx).text().to_std_string()))
+            .collect();
+        match handle.inject(&paths) {
+            Ok(()) => self.ui.lib_list.clear(),
+            Err(e) => {
+                QMessageBox::critical_q_widget2_q_string(
+                    &self.ui.main,
+                    &qs("Failed to inject"),
+                    &qs(e.to_string()),
+                );
+            }
+        };
     }
 
     #[slot(SlotNoArgs)]
@@ -584,11 +681,11 @@ impl MainWindow {
     #[slot(SlotOfBool)]
     unsafe fn on_log_toggled(self: &Rc<Self>, state: bool) {
         self.ui.log_box.set_visible(state);
-        self.ui.widget.adjust_size();
+        self.ui.main.adjust_size();
         if !state {
             self.ui
-                .widget
-                .resize_2a(self.ui.widget.width(), self.ui.widget.height() - 100)
+                .main
+                .resize_2a(self.ui.main.width(), self.ui.main.height() - 100)
         }
     }
 }

@@ -46,6 +46,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::ptr::{null, null_mut};
+use std::str::from_utf8;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use libc::{c_char, fileno, geteuid, pid_t};
@@ -187,10 +188,27 @@ fn process_child<I: Write, O: Read + AsRawFd>(
                 if let Ok(mut r) = nonblock::NonBlockingReader::from_fd($stdout) {
                     let _ = r.read_available(&mut buf_full);
                 }
+
+                if &buf_full[..2] == b"0x" {
+                    if let Ok(err_str) = from_utf8(&buf_full[2..]) {
+                        if let Ok(err_code) = i32::from_str_radix(err_str, 16) {
+                            let mach_err = unsafe {
+                                std::ffi::CStr::from_ptr(mach_util::mach_error::mach_error_string(
+                                    err_code,
+                                ))
+                                .to_string_lossy()
+                            };
+                            let err =
+                                format!("portfetch child failed to {}: {}", $stage_name, mach_err);
+                            return Err(std::io::Error::new(ErrorKind::Other, err));
+                        }
+                    }
+                }
+
                 let err = String::from_utf8_lossy(&buf_full).to_string();
                 return Err(std::io::Error::new(
                     ErrorKind::BrokenPipe,
-                    format!("portfetch child failed {}: {}", $stage_name, err),
+                    format!("portfetch child failed to {}: {}", $stage_name, err),
                 ));
             }
         }};

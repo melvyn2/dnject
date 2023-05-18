@@ -736,10 +736,20 @@
              <number>3</number>
             </property>
             <item row="0" column="0" rowspan="4">
+             <widget class="QLabel" name="lib_drag_label">
+              <property name="text">
+               <string>Drop libraries here to add</string>
+              </property>
+              <property name="alignment">
+               <set>Qt::AlignCenter</set>
+              </property>
+             </widget>
+            </item>
+            <item row="0" column="0" rowspan="4">
              <widget class="QListWidget" name="lib_list">
               <property name="toolTip">
                <string>List of libraries to inject to target.
-Drag drag to reorder and drop files to add them.</string>
+Drag to reorder and drop files to add them.</string>
               </property>
               <property name="styleSheet">
                <string notr="true">background-color: rgba(0,0,0,0)</string>
@@ -758,28 +768,6 @@ Drag drag to reorder and drop files to add them.</string>
               </property>
               <property name="alternatingRowColors">
                <bool>true</bool>
-              </property>
-              <property name="movement">
-               <enum>QListView::Free</enum>
-              </property>
-             </widget>
-            </item>
-            <item row="3" column="1">
-             <widget class="QToolButton" name="lib_del">
-              <property name="enabled">
-               <bool>false</bool>
-              </property>
-              <property name="sizePolicy">
-               <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
-                <horstretch>0</horstretch>
-                <verstretch>0</verstretch>
-               </sizepolicy>
-              </property>
-              <property name="toolTip">
-               <string>Remove library from injection list</string>
-              </property>
-              <property name="text">
-               <string>-</string>
               </property>
              </widget>
             </item>
@@ -849,13 +837,22 @@ Drag drag to reorder and drop files to add them.</string>
               </property>
              </widget>
             </item>
-            <item row="0" column="0" rowspan="4">
-             <widget class="QLabel" name="lib_drag_label">
-              <property name="text">
-               <string>Drop libraries here to add</string>
+            <item row="3" column="1">
+             <widget class="QToolButton" name="lib_del">
+              <property name="enabled">
+               <bool>false</bool>
               </property>
-              <property name="alignment">
-               <set>Qt::AlignCenter</set>
+              <property name="sizePolicy">
+               <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+                <horstretch>0</horstretch>
+                <verstretch>0</verstretch>
+               </sizepolicy>
+              </property>
+              <property name="toolTip">
+               <string>Remove library from injection list</string>
+              </property>
+              <property name="text">
+               <string>-</string>
               </property>
              </widget>
             </item>
@@ -936,13 +933,8 @@ Drag drag to reorder and drop files to add them.</string>
              <bool>false</bool>
             </property>
             <attribute name="headerDefaultSectionSize">
-             <number>50</number>
+             <number>60</number>
             </attribute>
-            <column>
-             <property name="text">
-              <string/>
-             </property>
-            </column>
             <column>
              <property name="text">
               <string>File</string>
@@ -955,9 +947,6 @@ Drag drag to reorder and drop files to add them.</string>
             </column>
             <item>
              <property name="text">
-              <string>New Item</string>
-             </property>
-             <property name="text">
               <string>UI Test lib</string>
              </property>
              <property name="text">
@@ -965,9 +954,6 @@ Drag drag to reorder and drop files to add them.</string>
              </property>
             </item>
             <item>
-             <property name="text">
-              <string>New Item</string>
-             </property>
              <property name="text">
               <string>2</string>
              </property>

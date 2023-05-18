@@ -10,7 +10,7 @@ use std::sync::atomic::{fence, AtomicU8, Ordering};
 use std::thread::sleep;
 use std::time::Duration;
 
-use libc::{pid_t, _SC_PAGESIZE};
+use libc::{kill, pid_t, SIGKILL, _SC_PAGESIZE};
 
 use mach2::boolean::boolean_t;
 use mach2::mach_port::mach_port_deallocate;
@@ -139,7 +139,8 @@ impl TryFrom<mach_port_t> for ProcHandle {
     type Error = std::io::Error;
 
     /// Checks if the port is a valid task port and creates a new handle from it.
-    /// This has move semantics in regards to the mach port, as its refcount is not incremented.
+    ///
+    /// This method has move semantics in regards to the mach port, as its refcount is not incremented.
     /// The callee must manually increment the refcount if it needs to continue using the port.
     fn try_from(task_port: mach_port_t) -> Result<Self, Self::Error> {
         let pid = unsafe {
@@ -830,11 +831,8 @@ impl ProcHandle {
                     .enumerate()
                     .find_map(|(i, h)| if h.is_null() { Some(i) } else { None })
                     .unwrap();
-                let mut err_str = format!(
-                    "Bootstrap thread failed on dlopen for library {} ({})",
-                    fail_idx,
-                    libs[fail_idx].to_string_lossy()
-                );
+                let mut err_str =
+                    format!("Bootstrap thread failed on dlopen for library {}", fail_idx);
 
                 // Load dlerror if it exists
                 let dlerror_str = unsafe {
@@ -847,7 +845,10 @@ impl ProcHandle {
                     // It feels stupid calling .to_string().as_str() but whatever
                     err_str += CStr::from_bytes_until_nul(&dlerror_str)
                         .map(|cstr| format!(": {}", cstr.to_string_lossy()))
-                        .unwrap_or(": (dlerror string unparseable)".to_string())
+                        .unwrap_or(format!(
+                            ": {} (dlerror string unparseable)",
+                            libs[fail_idx].to_string_lossy()
+                        ))
                         .as_str();
                 }
 
@@ -940,6 +941,14 @@ impl ProcHandle {
     // or [new_pre_inject](Self::new)
     pub fn take_proc_child(&mut self) -> Option<Child> {
         self.child_handle.take()
+    }
+
+    /// Kill target process forcefully (not yet impl)
+    #[doc(hidden)]
+    pub fn kill(self) {
+        // TODO use mach APIs and task port instead
+        unsafe { kill(self.pid.into(), SIGKILL) };
+        drop(self);
     }
 }
 

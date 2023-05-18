@@ -10,7 +10,7 @@ use qt_ui_tools::ui_form;
 #[ui_form("../ui/main.ui")]
 pub struct MainUI {
     // Top level widget
-    pub widget: QBox<QWidget>,
+    pub main: QBox<QWidget>,
     // Target/Inject screen switcher
     pub main_stack: QPtr<QStackedWidget>,
     // Target selector tabs
@@ -41,7 +41,7 @@ pub struct MainUI {
     pub kill_button: QPtr<QPushButton>,
     pub copy_or_launch_button: QPtr<QPushButton>,
     // Library inject widgets
-    pub lib_list_layout: QPtr<QGridLayout>,
+    pub lib_list_gbox: QPtr<QGroupBox>,
     pub lib_list: QPtr<QListWidget>,
     pub lib_add: QPtr<QToolButton>,
     pub lib_pick: QPtr<QToolButton>,
@@ -78,10 +78,16 @@ impl MainUI {
         self.proc_table.header().resize_section(1, 60);
         self.proc_table.header().resize_section(2, 60);
 
+        self.module_list.header().set_stretch_last_section(false);
+        self.module_list
+            .header()
+            .set_section_resize_mode_2a(0, q_header_view::ResizeMode::Stretch);
+        self.module_list.header().resize_section(1, 120);
+
         macro_rules! set_standard_icon {
             ($button:ident, $icon:ident) => {
                 self.$button.set_icon(
-                    self.widget
+                    self.main
                         .style()
                         .standard_icon_1a(StandardPixmap::$icon)
                         .as_ref(),
