@@ -1,6 +1,5 @@
 use std::alloc::{Allocator, Global, Layout};
 use std::ffi::{c_char, c_int, c_ulong, c_void, CStr, CString};
-use std::io::ErrorKind;
 use std::mem::size_of;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
@@ -23,6 +22,7 @@ use mach2::vm_prot::{VM_PROT_EXECUTE, VM_PROT_READ, VM_PROT_WRITE};
 use mach2::vm_statistics::VM_FLAGS_ANYWHERE;
 use mach2::vm_types::{mach_vm_address_t, mach_vm_size_t};
 
+use crate::{InjectorError, InjectorErrorKind};
 use mach_util::ldsyms::{_mh_execute_header, getsectiondata};
 use mach_util::mach_error::mach_error_string;
 use mach_util::tasks::thread_create_running;
@@ -32,13 +32,13 @@ use mach_util::{get_pid_cpu_type, mach_try};
 
 mod bootstrap;
 
-fn ensure_matching_arch(target: pid_t) -> Result<(), std::io::Error> {
+fn ensure_matching_arch(target: pid_t) -> Result<(), InjectorError> {
     let target_arch = get_pid_cpu_type(target)?;
     let self_arch = unsafe { _mh_execute_header.cputype };
     if target_arch != self_arch {
         // TODO translate CPU type number to string
-        return Err(std::io::Error::new(
-            ErrorKind::Unsupported,
+        return Err(InjectorError::new(
+            InjectorErrorKind::InvalidArchitecture,
             format!(
                 "target has different CPU type ({:x}) than injector ({:x})",
                 target_arch, self_arch
@@ -97,10 +97,10 @@ pub struct ProcHandle {
     child_handle: Option<Child>,
     modules: Vec<ModHandle>,
 }
-type ModHandle = (PathBuf, *mut c_void);
+pub type ModHandle = (PathBuf, *mut c_void);
 
 impl TryFrom<pid_t> for ProcHandle {
-    type Error = std::io::Error;
+    type Error = InjectorError;
 
     /// Attempt to gain access to the specified pid. See [Codesigning and entitlements on macOS](ProcHandle#codesigning-and-entitlements-on-macos)
     fn try_from(target: pid_t) -> Result<Self, Self::Error> {
@@ -110,11 +110,10 @@ impl TryFrom<pid_t> for ProcHandle {
         let mut task_port: libc::mach_port_t = 0;
         match unsafe { task_for_pid(mach_task_self(), target, &mut task_port) } {
                 libc::KERN_SUCCESS => Ok(()),
-                libc::KERN_FAILURE => Err(std::io::Error::new(ErrorKind::PermissionDenied,
+                libc::KERN_FAILURE => Err(InjectorError::new(InjectorErrorKind::AttachPermission,
       "task_for_pid returned KERN_FAILURE. \
-            Ensure you have the proper permissions and check Console.app for `macOSTaskPolicy` entries. \
-            Possible solutions: sign the target with get-task-allow, or disable SIP and run as root.")),
-                other => Err(std::io::Error::new(ErrorKind::Other,
+            Ensure you have the proper permissions and check Console.app for `macOSTaskPolicy` entries.")),
+                other => Err(InjectorError::new(InjectorErrorKind::AttachFailure,
                                     format!("`task_for_pid({})` returned unknown code 0x{:x}: {}",
                                             target, other,
                                             unsafe {CStr::from_ptr(mach_error_string(other))}.to_string_lossy())))
@@ -136,7 +135,7 @@ impl TryFrom<pid_t> for ProcHandle {
 }
 
 impl TryFrom<mach_port_t> for ProcHandle {
-    type Error = std::io::Error;
+    type Error = InjectorError;
 
     /// Checks if the port is a valid task port and creates a new handle from it.
     ///
@@ -173,7 +172,7 @@ impl ProcHandle {
 
     /// Spawns a child process using `cmd`, retains the [Child] handle, and
     /// attempts to gain the task port with [task_for_pid]
-    pub fn new(cmd: Command) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(cmd: Command) -> Result<Self, InjectorError> {
         let mut cmd = cmd;
         let child = cmd.spawn()?;
         let mut res = Self::try_from(child.id() as pid_t)?;
@@ -187,7 +186,6 @@ impl ProcHandle {
     pub fn new_mpd(cmd: Command) -> Result<Self, Box<dyn std::error::Error>> {
         // Put imports here as to not trigger clippy when function is ignored
         use spawn_task_port::CommandSpawnWithTask;
-        use std::os::unix::process::CommandExt;
 
         let mut cmd = cmd;
         let (child, task_port) = cmd.spawn_get_task_port()?;
@@ -234,7 +232,11 @@ impl ProcHandle {
         libs: &[PathBuf],
     ) -> Result<ProcHandle, Box<dyn std::error::Error>> {
         use libc::{MAP_ANONYMOUS, MAP_FAILED, MAP_SHARED, PROT_READ, PROT_WRITE, RTLD_NOW};
+        use spawn_task_port::CommandSpawnWithTask;
         use std::cmp::min;
+        use std::mem::MaybeUninit;
+        use std::os::unix::process::CommandExt;
+        use std::ptr::null_mut;
 
         if libs.len() >= u8::MAX as usize {
             return Err(Box::new(std::io::Error::new(
@@ -424,15 +426,15 @@ impl ProcHandle {
     }
 
     /// Inject the libraries at the given paths sequentially into the running process
-    pub fn inject(&mut self, libs: &[PathBuf]) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn inject(&mut self, libs: &[PathBuf]) -> Result<(), InjectorError> {
         if libs.len() >= u8::MAX as usize {
-            return Err(Box::new(std::io::Error::new(
-                ErrorKind::ArgumentListTooLong,
+            return Err(InjectorError::new(
+                InjectorErrorKind::TooManyModules,
                 format!(
                     "too many libraries for a single inject call (max {})",
                     u8::MAX - 1
                 ),
-            )));
+            ));
         }
 
         // Create the buffer holding the path strings and the pointers to each string
@@ -520,12 +522,13 @@ impl ProcHandle {
             seg_pthread_routine_offset
         );
 
+        // Unwrap cause memory errors are def not our problem
         let local_data_layout = Layout::from_size_align(
             size_of::<bootstrap::RemoteThreadData>() + paths_buf.len(),
             unsafe { libc::sysconf(_SC_PAGESIZE) } as usize,
         )
         .unwrap();
-        let local_data = Global.allocate_zeroed(local_data_layout)?;
+        let local_data = Global.allocate_zeroed(local_data_layout).unwrap();
 
         // Map the shellcode
         let remote_code_ptr = unsafe {
@@ -758,31 +761,31 @@ impl ProcHandle {
         unsafe { thread_terminate(remote_thread) };
         match status {
             0 => {
-                return Err(Box::new(std::io::Error::new(
-                    ErrorKind::Other,
+                return Err(InjectorError::new(
+                    InjectorErrorKind::RemoteFailure,
                     "Bootstrap thread did not execute",
-                )));
+                ));
             }
             1 => {
-                return Err(Box::new(std::io::Error::new(
-                    ErrorKind::Other,
+                return Err(InjectorError::new(
+                    InjectorErrorKind::RemoteFailure,
                     "Bootstrap thread failed or stuck before loader thread spawn",
-                )));
+                ));
             }
             2 => {
-                return Err(Box::new(std::io::Error::new(
-                    ErrorKind::Other,
+                return Err(InjectorError::new(
+                    InjectorErrorKind::RemoteFailure,
                     "Bootstrap thread failed to spawn loader thread",
-                )));
+                ));
             }
             3 => {
                 log::trace!("Bootstrap thread launched loader thread");
             }
             other => {
-                return Err(Box::new(std::io::Error::new(
-                    ErrorKind::Other,
+                return Err(InjectorError::new(
+                    InjectorErrorKind::RemoteFailure,
                     format!("Bootstrap status set to unknown value {}", other),
-                )));
+                ));
             }
         }
 
@@ -804,20 +807,21 @@ impl ProcHandle {
 
         // Ensure that non-atomic struct members have been fully written
         fence(Ordering::SeqCst);
-        match status {
+        let ret = match status {
             0 => {
-                return Err(Box::new(std::io::Error::new(
-                    ErrorKind::Other,
+                return Err(InjectorError::new(
+                    InjectorErrorKind::RemoteFailure,
                     "Loader thread did not execute",
-                )))
+                ));
             }
             1 => {
-                return Err(Box::new(std::io::Error::new(
-                    ErrorKind::Other,
+                return Err(InjectorError::new(
+                    InjectorErrorKind::RemoteFailure,
                     "Loader thread failed or stuck before `dlopen` loop",
-                )));
+                ));
             }
             2 => {
+                log::error!("Loader thread failed to load all libraries, retrieving error");
                 // SAFETY: 2 is a completed status, so this thread is sole accessor of data struct
                 let handles = unsafe {
                     local_data
@@ -831,8 +835,7 @@ impl ProcHandle {
                     .enumerate()
                     .find_map(|(i, h)| if h.is_null() { Some(i) } else { None })
                     .unwrap();
-                let mut err_str =
-                    format!("Bootstrap thread failed on dlopen for library {}", fail_idx);
+                let mut err_str = format!("dlopen failed for library {}", fail_idx);
 
                 // Load dlerror if it exists
                 let dlerror_str = unsafe {
@@ -852,18 +855,22 @@ impl ProcHandle {
                         .as_str();
                 }
 
-                return Err(Box::new(std::io::Error::new(ErrorKind::Other, err_str)));
+                Err(InjectorError::new(
+                    InjectorErrorKind::PartialSuccess(fail_idx),
+                    err_str,
+                ))
             }
             3 => {
                 log::trace!("Loader thread succeeded");
+                Ok(())
             }
             other => {
-                return Err(Box::new(std::io::Error::new(
-                    ErrorKind::Other,
+                return Err(InjectorError::new(
+                    InjectorErrorKind::RemoteFailure,
                     format!("Bootstrap status set to unknown value {}", other),
-                )))
+                ));
             }
-        }
+        };
 
         // Loader process has exited and memory barrier passed, safe to read struct
         let handles = unsafe {
@@ -873,13 +880,8 @@ impl ProcHandle {
                 .lib_ptrs
         }
         .into_iter()
-        .filter_map(|h| {
-            if !h.is_null() {
-                Some(h as *mut c_void)
-            } else {
-                None
-            }
-        });
+        .map(|h| h as *mut c_void)
+        .take_while(|h| !h.is_null());
 
         let mut new_modules: Vec<ModHandle> =
             std::iter::zip(libs.iter().cloned(), handles).collect();
@@ -891,7 +893,11 @@ impl ProcHandle {
                 &new_modules
             );
         } else {
-            log::info!("Successfully injected {} modules", new_modules.len());
+            log::info!(
+                "Successfully injected {} modules of {}",
+                new_modules.len(),
+                libs.len()
+            );
         }
 
         self.modules.append(&mut new_modules);
@@ -917,7 +923,58 @@ impl ProcHandle {
         }
         log::trace!("All remote allocations deallocated");
 
-        Ok(())
+        ret
+    }
+
+    /// Ejects the given [ModHandle]s if they are owned by this instance
+    #[doc(hidden)]
+    pub fn eject(&mut self, handles: &[ModHandle]) -> Result<(), InjectorError> {
+        // Get vec of ModHandles whose raw handles aren't owned by this struct
+        let mut owned_mods = self.modules.clone();
+        let mut non_owned: Vec<&ModHandle> = Vec::new();
+        let mut non_owned_idx: Vec<usize> = Vec::new();
+        // This is necessary to remove one match at a time rather than all matches
+        for (idx, target) in handles.iter().enumerate() {
+            if let Some(p) = owned_mods.iter().position(|c| c.1 == target.1) {
+                owned_mods.remove(p);
+            } else {
+                non_owned_idx.push(idx);
+                non_owned.push(target);
+            }
+        }
+
+        if !non_owned.is_empty() {
+            return Err(InjectorError::new(
+                InjectorErrorKind::ModuleHandlesNotOwned(non_owned_idx),
+                format!("non-owned ModHandle cannot be ejected: {:?}", non_owned),
+            ));
+        };
+
+        let raw_handles = handles.iter().map(|m| m.1).collect::<Vec<*mut c_void>>();
+        match unsafe { self.eject_raw(&raw_handles) } {
+            Ok(()) => {
+                self.modules = owned_mods;
+                Ok(())
+            }
+            Err(e) => {
+                if let InjectorErrorKind::PartialSuccess(idx) = e.kind() {
+                    self.modules = self.modules.split_off(*idx);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Closes the given raw dlopen handles. This is not guaranteed to unload the associated modules
+    /// as they are reference counted (dlclose must be called once for each dlopen call of a library)
+    /// # SAFETY
+    /// The caller must ensure that the handle is valid for the target process
+    #[doc(hidden)]
+    pub unsafe fn eject_raw(&mut self, _handles: &[*mut c_void]) -> Result<(), InjectorError> {
+        Err(InjectorError::new(
+            InjectorErrorKind::Unknown,
+            "not yet impl",
+        ))
     }
 
     /// Returns a reference counted copy of the underlying task port. The port refcount is incremented,
@@ -932,8 +989,8 @@ impl ProcHandle {
     }
 
     /// Returns the paths of the currently injected modules
-    pub fn current_modules(&self) -> Vec<PathBuf> {
-        self.modules.iter().map(|(p, _)| p.clone()).collect()
+    pub fn current_modules(&self) -> &[(PathBuf, *mut c_void)] {
+        &self.modules
     }
 
     /// Returns the owned [Child] handle to the underlying process, if one exists. Effective only
@@ -947,7 +1004,7 @@ impl ProcHandle {
     #[doc(hidden)]
     pub fn kill(self) {
         // TODO use mach APIs and task port instead
-        unsafe { kill(self.pid.into(), SIGKILL) };
+        unsafe { kill(self.pid, SIGKILL) };
         drop(self);
     }
 }

@@ -49,6 +49,7 @@ pub struct MainUI {
     pub lib_del: QPtr<QToolButton>,
     pub inject_button: QPtr<QPushButton>,
     // Eject widgets
+    pub module_list_gbox: QPtr<QGroupBox>,
     pub module_list: QPtr<QTreeWidget>,
     pub eject_button: QPtr<QPushButton>,
     // Return to target selection

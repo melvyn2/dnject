@@ -920,6 +920,9 @@ Drag to reorder and drop files to add them.</string>
             <property name="alternatingRowColors">
              <bool>true</bool>
             </property>
+            <property name="selectionMode">
+             <enum>QAbstractItemView::MultiSelection</enum>
+            </property>
             <property name="rootIsDecorated">
              <bool>false</bool>
             </property>
@@ -945,22 +948,6 @@ Drag to reorder and drop files to add them.</string>
               <string>Handle</string>
              </property>
             </column>
-            <item>
-             <property name="text">
-              <string>UI Test lib</string>
-             </property>
-             <property name="text">
-              <string>0x000</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string>2</string>
-             </property>
-             <property name="text">
-              <string>3</string>
-             </property>
-            </item>
            </widget>
           </item>
           <item>

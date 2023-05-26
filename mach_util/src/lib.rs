@@ -21,8 +21,8 @@ macro_rules! mach_try {
                 ::std::ffi::CStr::from_ptr($crate::mach_error::mach_error_string(kr))
                     .to_string_lossy()
             );
-            #[cfg(panic = "unwind")]
-            let err_str = format!("[{}:{}] {}", file!(), line!(), err_str);
+            // #[cfg(panic = "unwind")]
+            // let err_str = format!("[{}:{}] {}", file!(), line!(), err_str);
             ::std::result::Result::Err(::std::io::Error::new(::std::io::ErrorKind::Other, err_str))
         }
     }};

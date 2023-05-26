@@ -1,17 +1,20 @@
+#![feature(let_chains)]
+#![feature(if_let_guard)]
 #![windows_subsystem = "windows"]
 
 use std::cell::RefCell;
-use std::ffi::{c_int, CStr};
+use std::ffi::{c_int, c_void};
 use std::io::ErrorKind;
 use std::mem::transmute;
 use std::ops::Deref;
 use std::path::PathBuf;
+use std::ptr::null_mut;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
 use log::{Level, LevelFilter, Log, Metadata, Record};
 
-use cpp_core::{CppBox, Ptr, Ref, StaticUpcast};
+use cpp_core::{CppDeletable, Ptr, Ref, StaticUpcast};
 use libc::pid_t;
 
 use qt_core::{
@@ -27,7 +30,7 @@ use sysinfo::{
     Pid, PidExt, ProcessExt, ProcessRefreshKind, RefreshKind, System, SystemExt, UserExt,
 };
 
-use injector::ProcHandle;
+use injector::{InjectorErrorKind, ModHandle, ProcHandle};
 
 mod ui;
 use ui::MainUI;
@@ -70,25 +73,27 @@ impl Log for TextEditLogger {
     }
 
     fn log(&self, record: &Record) {
-        if !self.enabled(record.metadata()) {
+        if !self.enabled(record.metadata()) || record.metadata().target().contains("goblin") {
             return;
         }
 
         let log_line = format!("{} [{}] {}", record.level(), record.target(), record.args());
         // No dark mode detection, yay! White background is forced in .ui file
         let color = match record.level() {
-            Level::Error => GlobalColor::Red,
-            Level::Warn => GlobalColor::DarkYellow,
-            Level::Info => GlobalColor::Black,
-            Level::Debug => GlobalColor::DarkGray,
-            Level::Trace => GlobalColor::DarkBlue,
+            Level::Error => (GlobalColor::Red, 31),
+            Level::Warn => (GlobalColor::DarkYellow, 33),
+            Level::Info => (GlobalColor::Black, 39),
+            Level::Debug => (GlobalColor::DarkGray, 90),
+            Level::Trace => (GlobalColor::DarkBlue, 34),
         };
+
+        println!("\x1b[{}m{}\x1b[39;49m", color.1, log_line);
 
         let text_color_signal_ptr = self.text_color_signal_ptr.load(Ordering::Acquire);
         let append_signal_ptr = self.append_signal_ptr.load(Ordering::Acquire);
         unsafe {
             let text_color_signal = text_color_signal_ptr.as_ref().unwrap();
-            text_color_signal.emit(&QColor::from_global_color(color));
+            text_color_signal.emit(&QColor::from_global_color(color.0));
             let append_signal = append_signal_ptr.as_ref().unwrap();
             append_signal.emit(&qs(log_line));
         };
@@ -162,12 +167,7 @@ impl MainWindow {
         // Which only safe function pointers are
         unsafe {
             if event.type_() == q_event::Type::DragEnter {
-                log::trace!("received DragEnter event");
-                log::trace!(
-                    "event parent object: {:?}",
-                    CStr::from_ptr(obj.meta_object().class_name())
-                );
-                // Transmute is safe because we check the event type
+                // SAFETY: Transmute is safe because we check the event type
                 let drag_event: &mut QDragEnterEvent = transmute(event);
                 let mime_data = drag_event.mime_data().text().to_std_string();
                 let urls: Vec<&str> = mime_data.lines().collect();
@@ -176,18 +176,13 @@ impl MainWindow {
                         .into_iter()
                         .all(|url| url.is_empty() || url.ends_with('/'))
                 {
-                    log::trace!("event has valid urls, accepting");
+                    // Accepting the DragEnter is necessary to receive the Drop event
                     drag_event.set_drop_action(DropAction::LinkAction);
                     drag_event.accept();
                     return true;
                 }
             } else if event.type_() == q_event::Type::Drop {
-                log::trace!("received Drop event");
-                log::trace!(
-                    "parent object: {:?}",
-                    CStr::from_ptr(obj.meta_object().class_name())
-                );
-                // Transmute is safe because we check the event type
+                // SAFETY: Transmute is safe because we check the event type
                 let drop_event: &mut QDropEvent = transmute(event);
                 let mime_data = drop_event.mime_data().text().to_std_string();
                 let urls: Vec<&str> = mime_data.lines().collect();
@@ -254,15 +249,18 @@ impl MainWindow {
         bind!(lib_del, clicked, slot_on_lib_del);
         bind!(inject_button, clicked, slot_on_inject_clicked);
 
+        bind!(module_list, item_selection_changed, slot_on_module_selected);
+        bind!(eject_button, clicked, slot_on_eject_clicked);
+
         bind!(return_button, clicked, slot_on_back_clicked);
 
         bind!(log_check, toggled, slot_on_log_toggled);
     }
 
     #[slot(SlotOfInt)]
-    unsafe fn on_tab_changed(self: &Rc<Self>, _idx: i32) {
+    unsafe fn on_tab_changed(self: &Rc<Self>, idx: i32) {
         self.adjust_wine_inputs();
-        match _idx {
+        match idx {
             0 => self.on_proc_table_selection(),
             1 => self
                 .ui
@@ -314,7 +312,9 @@ impl MainWindow {
             if ownership_filter && proc.user_id().map(|uid| uid != cur_uid).unwrap_or(true) {
                 continue;
             }
-            let proc_item: CppBox<QTreeWidgetItem> = QTreeWidgetItem::new();
+            // This doesn't leak because parent (QTreeWidget) drops the item
+            let proc_item: Ptr<QTreeWidgetItem> =
+                QTreeWidgetItem::from_q_tree_widget(&self.ui.proc_table).into_ptr();
             proc_item.set_text(0, &qs(proc.name()));
             // Use data rather than text to allow sorting
             proc_item.set_data(1, 0, &QVariant::from_uint(pid.as_u32()));
@@ -328,9 +328,6 @@ impl MainWindow {
                     None => qs(""),
                 },
             );
-            self.ui
-                .proc_table
-                .insert_top_level_item(0, proc_item.into_ptr());
         }
     }
 
@@ -576,8 +573,10 @@ impl MainWindow {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            log::error!("attach not impl for platform");
-            return;
+            return Err(Box::new(std::io::Error::new(
+                ErrorKind::Unsupported,
+                "attach not impl for platform",
+            )));
         }
     }
 
@@ -586,13 +585,12 @@ impl MainWindow {
         let handle = match self.attach() {
             Ok(p) => p,
             Err(e) => {
+                let err_str = format!("The target process process could not be attached to: {}", e);
+                log::error!("{}", err_str);
                 QMessageBox::critical_q_widget2_q_string(
                     &self.ui.main,
                     &qs("Failed to attach to target"),
-                    &qs(format!(
-                        "The target process process could not be attached to: {}",
-                        e
-                    )),
+                    &qs(err_str),
                 );
                 return;
             }
@@ -602,15 +600,14 @@ impl MainWindow {
         self.ui.attach_button.set_enabled(false);
         self.ui.kill_button.set_enabled(true);
         self.ui.lib_list_gbox.set_enabled(true);
+        self.ui.module_list_gbox.set_enabled(true);
         self.ui.t_has_perms.set_text(&qs("Successfully attached"));
     }
 
     #[slot(SlotOfInt)]
     unsafe fn on_lib_changed(self: &Rc<Self>, idx: i32) {
         if self.ui.lib_list.count() > 0 {
-            self.ui
-                .lib_list
-                .set_style_sheet(qt_core::QString::new().as_ref());
+            self.ui.lib_list.set_style_sheet(&qs(""));
             self.ui.inject_button.set_enabled(true);
             self.ui.lib_move.set_enabled(idx > 0);
             self.ui.lib_del.set_enabled(idx >= 0);
@@ -661,6 +658,11 @@ impl MainWindow {
         match handle.inject(&paths) {
             Ok(()) => self.ui.lib_list.clear(),
             Err(e) => {
+                if let InjectorErrorKind::PartialSuccess(idx) = e.kind() {
+                    for i in 0..*idx {
+                        self.ui.lib_list.take_item(i as c_int).delete();
+                    }
+                };
                 QMessageBox::critical_q_widget2_q_string(
                     &self.ui.main,
                     &qs("Failed to inject"),
@@ -668,14 +670,101 @@ impl MainWindow {
                 );
             }
         };
+        drop(handle_ref);
+        self.update_modules()
+    }
+
+    #[slot(SlotNoArgs)]
+    unsafe fn on_module_selected(self: &Rc<Self>) {
+        if self.ui.module_list.selected_items().count_0a() > 0 {
+            self.ui.eject_button.set_text(&qs("Eject Selected"));
+        } else {
+            self.ui.eject_button.set_text(&qs("Eject All"));
+        }
+    }
+
+    unsafe fn update_modules(self: &Rc<Self>) {
+        let mut handle_ref = self.target_handle.borrow_mut();
+        let handle = handle_ref.as_mut().unwrap();
+        self.ui
+            .eject_button
+            .set_enabled(!handle.current_modules().is_empty());
+        self.ui.module_list.clear();
+        for (path, handle) in handle.current_modules() {
+            let mod_item: Ptr<QTreeWidgetItem> =
+                QTreeWidgetItem::from_q_tree_widget(&self.ui.module_list).into_ptr();
+            mod_item.set_text(0, &qs(path.file_name().unwrap().to_string_lossy()));
+            // Use data rather than text to allow sorting
+            mod_item.set_text(1, &QString::number_u64_int(*handle as u64, 16));
+        }
+    }
+
+    #[slot(SlotNoArgs)]
+    unsafe fn on_eject_clicked(self: &Rc<Self>) {
+        let module_items: Box<dyn Iterator<Item = Ptr<QTreeWidgetItem>>> =
+            if self.ui.module_list.selected_items().count_0a() > 0 {
+                Box::new(
+                    self.ui
+                        .module_list
+                        .selected_items()
+                        .iter()
+                        .map(|p| Ptr::from_raw(*p)),
+                )
+            } else {
+                Box::new(
+                    (0..self.ui.module_list.top_level_item_count())
+                        .map(|idx| self.ui.module_list.top_level_item(idx)),
+                )
+            };
+
+        let handles = module_items
+            .map(|item| {
+                (
+                    PathBuf::from(item.text(0).to_std_string()),
+                    item.text(1).to_u_long_long_2a(null_mut(), 16) as *mut c_void,
+                )
+            })
+            .collect::<Vec<ModHandle>>();
+
+        let mut prochandle_ref = self.target_handle.borrow_mut();
+        let prochandle = prochandle_ref.as_mut().unwrap();
+        match prochandle.eject(&handles) {
+            Ok(()) => {}
+            Err(e) => {
+                let err_str = format!("Module(s) could not be ejected: {}", e);
+                log::error!("{}", err_str);
+                QMessageBox::critical_q_widget2_q_string(
+                    &self.ui.main,
+                    &qs("Failed to eject modules"),
+                    &qs(err_str),
+                );
+                return;
+            }
+        }
+        drop(prochandle_ref);
+        self.update_modules();
     }
 
     #[slot(SlotNoArgs)]
     unsafe fn on_back_clicked(self: &Rc<Self>) {
         self.target_handle.replace(None);
         self.target_process.replace(None);
-        self.on_refresh_clicked();
+        self.ui.kill_button.set_enabled(false);
+        self.ui.attach_button.set_enabled(true);
+
+        self.ui.lib_list_gbox.set_enabled(false);
+        self.ui.lib_list.clear();
+        self.ui
+            .lib_list
+            .set_style_sheet(&qs("background-color: rgba(0,0,0,0)"));
+        self.ui.inject_button.set_enabled(false);
+
+        self.ui.module_list_gbox.set_enabled(false);
+        self.ui.module_list.clear();
+        self.ui.eject_button.set_enabled(false);
+
         self.ui.main_stack.set_current_index(0);
+        self.on_refresh_clicked();
     }
 
     #[slot(SlotOfBool)]
