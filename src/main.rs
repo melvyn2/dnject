@@ -8,6 +8,7 @@ use std::io::ErrorKind;
 use std::mem::transmute;
 use std::ops::Deref;
 use std::path::PathBuf;
+use std::process::Command;
 use std::ptr::null_mut;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -30,10 +31,13 @@ use sysinfo::{
     Pid, PidExt, ProcessExt, ProcessRefreshKind, RefreshKind, System, SystemExt, UserExt,
 };
 
-use injector::{InjectorErrorKind, ModHandle, ProcHandle};
+use injector::{InjectorError, InjectorErrorKind, ModHandle, ProcHandle};
 
 mod ui;
+use crate::term_spawn::spawn_term;
 use ui::MainUI;
+
+mod term_spawn;
 
 #[derive(Debug)]
 struct TextEditLogger {
@@ -87,6 +91,7 @@ impl Log for TextEditLogger {
             Level::Trace => (GlobalColor::DarkBlue, 34),
         };
 
+        // TODO windows?
         println!("\x1b[{}m{}\x1b[39;49m", color.1, log_line);
 
         let text_color_signal_ptr = self.text_color_signal_ptr.load(Ordering::Acquire);
@@ -132,6 +137,9 @@ impl MainWindow {
         // Should be safe as this is guaranteed uninit object
         unsafe {
             new.qt_init();
+
+            new.on_back_clicked();
+
             new.on_refresh_clicked();
             let logger = Box::new(TextEditLogger::new(
                 new.ui.log_box.clone(),
@@ -160,6 +168,12 @@ impl MainWindow {
         self.ui.lib_list.install_event_filter(
             CustomEventFilter::new(Self::lib_list_event_filter).into_raw_ptr(),
         );
+        self.ui.exe_path_edit.line_edit().install_event_filter(
+            CustomEventFilter::new(Self::path_box_event_filter).into_raw_ptr(),
+        );
+        self.ui.cwd_path_edit.line_edit().install_event_filter(
+            CustomEventFilter::new(Self::path_box_event_filter).into_raw_ptr(),
+        );
     }
 
     fn lib_list_event_filter(obj: &mut QObject, event: &mut QEvent) -> bool {
@@ -169,12 +183,10 @@ impl MainWindow {
             if event.type_() == q_event::Type::DragEnter {
                 // SAFETY: Transmute is safe because we check the event type
                 let drag_event: &mut QDragEnterEvent = transmute(event);
-                let mime_data = drag_event.mime_data().text().to_std_string();
-                let urls: Vec<&str> = mime_data.lines().collect();
                 if drag_event.mime_data().has_urls()
-                    && !urls
-                        .into_iter()
-                        .all(|url| url.is_empty() || url.ends_with('/'))
+                    && !drag_event.mime_data().urls().iter().all(|url| {
+                        url.is_empty() || url.to_string_0a().to_std_string().ends_with('/')
+                    })
                 {
                     // Accepting the DragEnter is necessary to receive the Drop event
                     drag_event.set_drop_action(DropAction::LinkAction);
@@ -184,15 +196,49 @@ impl MainWindow {
             } else if event.type_() == q_event::Type::Drop {
                 // SAFETY: Transmute is safe because we check the event type
                 let drop_event: &mut QDropEvent = transmute(event);
-                let mime_data = drop_event.mime_data().text().to_std_string();
-                let urls: Vec<&str> = mime_data.lines().collect();
+                let paths = drop_event
+                    .mime_data()
+                    .urls()
+                    .iter()
+                    .map(|u| u.to_string_0a().to_std_string())
+                    .filter(|f| !f.is_empty() && !f.ends_with('/'));
+                // Safety: Transmute is safe because this event filter is only applied to a QListWidget
                 let list_widget: &mut QListWidget = transmute(obj);
-                for file in urls.into_iter().filter(|f| !f.ends_with('/')) {
+                for file in paths {
                     list_widget.add_item_q_string(&qs(file.replacen("file://", "", 1)));
                     let new_item = list_widget.item(list_widget.count() - 1);
                     new_item.set_flags(new_item.flags() | ItemFlag::ItemIsEditable);
                 }
                 list_widget.set_current_row_1a(list_widget.count() - 1);
+                drop_event.set_drop_action(DropAction::LinkAction);
+                drop_event.accept();
+                return true;
+            }
+        }
+        false
+    }
+
+    fn path_box_event_filter(obj: &mut QObject, event: &mut QEvent) -> bool {
+        unsafe {
+            if event.type_() == q_event::Type::DragEnter {
+                let drag_event: &mut QDragEnterEvent = transmute(event);
+                if drag_event.mime_data().urls().count_0a() == 1 {
+                    drag_event.set_drop_action(DropAction::LinkAction);
+                    drag_event.accept();
+                    return true;
+                }
+            } else if event.type_() == q_event::Type::Drop {
+                let drop_event: &mut QDropEvent = transmute(event);
+                // Safety: Transmute is safe because this event filter is only applied to a QLineEdit
+                let list_widget: &mut QLineEdit = transmute(obj);
+                list_widget.set_text(
+                    drop_event
+                        .mime_data()
+                        .urls()
+                        .first()
+                        .to_string_0a()
+                        .replace_2_q_string(&qs("file://"), &qs("")),
+                );
                 drop_event.set_drop_action(DropAction::LinkAction);
                 drop_event.accept();
                 return true;
@@ -234,11 +280,21 @@ impl MainWindow {
             current_text_changed,
             slot_on_exe_text_updated
         );
+        bind!(exe_pick, clicked, slot_on_exe_pick_clicked);
+        bind!(cwd_pick, clicked, slot_on_cwd_pick_clicked);
+        bind!(env_table, item_selection_changed, slot_on_env_selected);
+        bind!(env_add_button, clicked, slot_on_env_add);
+        bind!(env_del_button, clicked, slot_on_env_del);
 
         bind!(wine_mode_gbox, toggled, slot_on_wine_toggled);
 
         bind!(probe_button, clicked, slot_on_probe_clicked);
 
+        bind!(
+            copy_or_launch_button,
+            clicked,
+            slot_on_copy_or_launch_clicked
+        );
         bind!(kill_button, clicked, slot_on_kill_clicked);
         bind!(attach_button, clicked, slot_on_attach_clicked);
 
@@ -287,7 +343,6 @@ impl MainWindow {
         self.on_probe_clicked()
     }
 
-    // TODO not working
     #[slot(SlotNoArgs)]
     unsafe fn on_refresh_clicked(self: &Rc<Self>) {
         self.ui.proc_table.clear();
@@ -303,7 +358,7 @@ impl MainWindow {
         );
 
         let cur_uid = system
-            .process(Pid::from_u32(std::process::id()))
+            .process(Pid::from(std::process::id() as usize))
             .unwrap()
             .user_id()
             .unwrap();
@@ -334,6 +389,93 @@ impl MainWindow {
     #[slot(SlotOfQString)]
     unsafe fn on_exe_text_updated(self: &Rc<Self>, text: Ref<QString>) {
         self.ui.probe_button.set_enabled(!text.is_empty())
+    }
+
+    #[slot(SlotNoArgs)]
+    unsafe fn on_exe_pick_clicked(self: &Rc<Self>) {
+        let mut filter = String::from("Windows Executable (*.exe);;Any file (*)");
+        if cfg!(not(target_os = "windows")) {
+            filter = format!("Unix Executable (*);;{}", filter);
+        }
+
+        let path = QFileDialog::get_open_file_name_6a(
+            &self.ui.main,
+            &qs("Select the target executable"),
+            &qs(""),
+            &qs(filter),
+            &qs(""),
+            q_file_dialog::Option::DontResolveSymlinks | q_file_dialog::Option::ReadOnly,
+        );
+        if !path.is_empty() {
+            if cfg!(not(target_os = "windows")) {
+                self.ui
+                    .wine_mode_gbox
+                    .set_checked(path.ends_with_q_string(&qs(".exe")));
+            }
+            self.ui
+                .exe_path_edit
+                .insert_item_int_q_string(0, &self.ui.exe_path_edit.current_text());
+            self.ui.exe_path_edit.set_edit_text(&path);
+        }
+    }
+
+    #[slot(SlotNoArgs)]
+    unsafe fn on_cwd_pick_clicked(self: &Rc<Self>) {
+        let path = QFileDialog::get_existing_directory_4a(
+            &self.ui.main,
+            &qs("Select a working directory in which to launch the target"),
+            &qs(""),
+            q_file_dialog::Option::ShowDirsOnly
+                | q_file_dialog::Option::DontResolveSymlinks
+                | q_file_dialog::Option::ReadOnly,
+        );
+        if !path.is_empty() {
+            self.ui
+                .cwd_path_edit
+                .insert_item_int_q_string(0, &self.ui.cwd_path_edit.current_text());
+            self.ui.cwd_path_edit.set_edit_text(&path);
+        }
+    }
+
+    #[slot(SlotNoArgs)]
+    unsafe fn on_env_selected(self: &Rc<Self>) {
+        self.ui
+            .env_del_button
+            .set_enabled(!self.ui.env_table.selected_items().is_empty())
+    }
+
+    #[slot(SlotNoArgs)]
+    unsafe fn on_env_add(self: &Rc<Self>) {
+        let item: Ptr<QTreeWidgetItem> =
+            QTreeWidgetItem::from_q_tree_widget(&self.ui.env_table).into_ptr();
+        item.set_text(0, &qs(""));
+        item.set_text(1, &qs(""));
+        item.set_flags(item.flags() | ItemFlag::ItemIsEditable);
+        // Unselect old items
+        for old_item in self
+            .ui
+            .env_table
+            .selected_items()
+            .iter()
+            .map(|p| Ptr::from_raw(*p))
+        {
+            self.ui.env_table.set_item_selected(old_item, false);
+        }
+        // Select new item
+        self.ui.env_table.set_item_selected(item, true);
+    }
+
+    #[slot(SlotNoArgs)]
+    unsafe fn on_env_del(self: &Rc<Self>) {
+        for item in self
+            .ui
+            .env_table
+            .selected_items()
+            .iter()
+            .map(|p| Ptr::from_raw(*p))
+        {
+            item.delete()
+        }
     }
 
     #[slot(SlotOfBool)]
@@ -383,6 +525,48 @@ impl MainWindow {
             .set_current_text(qs::<&str>(self.wine_loc_saved.borrow().as_ref()).as_ref());
     }
 
+    unsafe fn probe_pid(self: &Rc<Self>, target: Pid) -> Result<(), ()> {
+        let mut system = self.system_data.borrow_mut();
+        system.refresh_specifics(
+            RefreshKind::new()
+                .with_processes(ProcessRefreshKind::new().with_user())
+                .with_users_list(),
+        );
+
+        let proc = match system.process(target) {
+            Some(p) => p,
+            None => {
+                return Err(());
+            }
+        };
+
+        self.target_process.replace(Some(target));
+
+        self.ui.attach_button.set_enabled(true);
+
+        self.ui.t_pid.set_text(&qs(format!("PID: {}", proc.pid())));
+        self.ui
+            .t_exe
+            .set_text(&qs(format!("Executable: {}", proc.exe().to_string_lossy())));
+        self.ui
+            .t_exe
+            .set_tool_tip(&qs(proc.exe().to_string_lossy()));
+
+        let user = match proc.effective_user_id() {
+            Some(uid) => match system.get_user_by_id(uid) {
+                Some(user) => format!("{} ({})", user.name(), uid.to_string()),
+                None => uid.to_string(),
+            },
+            None => "(unknown)".to_string(),
+        };
+        self.ui.t_user.set_text(&qs(format!("Owner: {}", user)));
+
+        // TODO check target arch & wine
+        // self.ui.t_type.set_text(&qs());
+        log::warn!("Process type check not impl");
+        Ok(())
+    }
+
     #[cfg(target_os = "macos")]
     fn expl_available() -> bool {
         let feat = cfg!(feature = "macos-ent-bypass");
@@ -400,51 +584,21 @@ impl MainWindow {
             0 => {
                 let proc_line = self.ui.proc_table.selected_items().take_first();
                 let pid = proc_line.data(1, 0).to_u_int_0a();
-                let mut system = self.system_data.borrow_mut();
-                system.refresh_specifics(
-                    RefreshKind::new()
-                        .with_processes(ProcessRefreshKind::new().with_user())
-                        .with_users_list(),
-                );
-                let proc = system.process(Pid::from_u32(pid));
 
-                if proc.is_none() {
-                    log::info!("Could not find process {}", pid);
-                    QMessageBox::warning_q_widget2_q_string(
-                        &self.ui.main,
-                        &qs("Process not found"),
-                        &qs("The process could not be located. It may have exited after the most recent refresh."),
-                    );
-                    drop(system);
-                    self.on_refresh_clicked();
-                    return;
-                }
-
-                let proc = proc.unwrap();
-
-                self.target_process.replace(Some(Pid::from_u32(pid)));
-                self.ui.attach_button.set_enabled(true);
-
-                self.ui.main_stack.set_current_index(1);
-                self.ui.t_pid.set_text(&qs(format!("PID: {}", proc.pid())));
-                self.ui
-                    .t_exe
-                    .set_text(&qs(format!("Executable: {}", proc.exe().to_string_lossy())));
-                self.ui
-                    .t_exe
-                    .set_tool_tip(&qs(proc.exe().to_string_lossy()));
-
-                let user = match proc.effective_user_id() {
-                    Some(uid) => match system.get_user_by_id(uid) {
-                        Some(user) => format!("{} ({})", user.name(), uid.to_string()),
-                        None => uid.to_string(),
-                    },
-                    None => "(unknown)".to_string(),
+                match self.probe_pid(Pid::from(pid as usize)) {
+                    Ok(()) => {}
+                    Err(_) => {
+                        log::info!("Could not find process {}", pid);
+                        QMessageBox::warning_q_widget2_q_string(
+                            &self.ui.main,
+                            &qs("Process not found"),
+                            &qs("The process could not be located. It may have exited after the most recent refresh/probe."),
+                        );
+                        self.on_refresh_clicked();
+                        return;
+                    }
                 };
 
-                self.ui.t_user.set_text(&qs(format!("Owner: {}", user)));
-                // TODO check target arch & wine
-                // self.ui.t_type.set_text(&qs());
                 // TODO check target euid & ents (on macos)
                 #[cfg(target_os = "macos")]
                 let status = {
@@ -476,14 +630,11 @@ impl MainWindow {
                     .copy_or_launch_button
                     .set_text(&qs("Copy to Launch"));
 
-                drop(system);
-
                 self.refresh_target_info();
-                log::warn!("Process type check not impl")
+
+                self.ui.main_stack.set_current_index(1);
             }
             1 => {
-                dbg!(self.ui.exe_path_edit.current_text().to_std_string());
-                dbg!(self.ui.exe_path_edit.line_edit().text().to_std_string());
                 self.ui
                     .exe_path_edit
                     .insert_item_int_q_string(0, &self.ui.exe_path_edit.current_text());
@@ -492,7 +643,88 @@ impl MainWindow {
                     .insert_item_int_q_string(0, &self.ui.cwd_path_edit.current_text());
 
                 self.ui.copy_or_launch_button.set_text(&qs("Launch"));
-                log::error!("launch probe handler unimpl")
+                self.ui.attach_button.set_text(&qs("Launch and Attach"));
+
+                let exe_path = self.ui.exe_path_edit.current_text().to_std_string();
+
+                self.ui
+                    .t_exe
+                    .set_text(&qs(format!("Executable: {}", exe_path)));
+                // TODO probe
+                // self.ui.t_has_perms.set_text(&qs());
+                self.ui.t_status.set_text(&qs("Status: not launched"));
+                // TODO probe
+                // self.ui.t_type.set_text(&qs());
+
+                log::warn!("Process type & perms check not impl");
+
+                self.ui.main_stack.set_current_index(1);
+            }
+            other => log::error!("unexpected target tab index {}", other),
+        }
+    }
+
+    unsafe fn create_target_cmd(self: &Rc<Self>) -> Result<Command, std::io::Error> {
+        let exe_path = self.ui.exe_path_edit.current_text().to_std_string();
+        let mut cmd = Command::new(exe_path);
+
+        let cwd = self.ui.cwd_path_edit.current_text().to_std_string();
+        if !cwd.is_empty() {
+            cmd.current_dir(cwd);
+        }
+
+        if !self.ui.inherit_env_checkbox.is_checked() {
+            cmd.env_clear();
+        }
+        for item in (0..self.ui.env_table.top_level_item_count())
+            .map(|idx| self.ui.env_table.top_level_item(idx))
+        {
+            cmd.env(item.text(0).to_std_string(), item.text(1).to_std_string());
+        }
+
+        let tty_fd = spawn_term()?;
+        cmd.stdout(tty_fd.try_clone()?);
+        cmd.stderr(tty_fd.try_clone()?);
+        cmd.stdin(tty_fd);
+
+        Ok(cmd)
+    }
+
+    #[slot(SlotNoArgs)]
+    unsafe fn on_copy_or_launch_clicked(self: &Rc<Self>) {
+        match self.ui.target_tabs.current_index() {
+            0 => {
+                log::error!("copy to launch unimpl")
+            }
+            1 => {
+                let child = match self.create_target_cmd().and_then(|mut c| c.spawn()) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let err_str = format!("The target could not be launched: {}", e);
+                        log::error!("{}", err_str);
+                        QMessageBox::critical_q_widget2_q_string(
+                            &self.ui.main,
+                            &qs("Failed to launch target"),
+                            &qs(err_str),
+                        );
+                        return;
+                    }
+                };
+
+                match self.probe_pid(Pid::from(child.id() as usize)) {
+                    Ok(()) => {}
+                    Err(_) => {
+                        log::info!("Could not locate launched process ({})", child.id());
+                        QMessageBox::warning_q_widget2_q_string(
+                        &self.ui.main,
+                        &qs("Process not found"),
+                        &qs("The launched process could not be located. It may have exited immediately."),
+                        );
+                        return;
+                    }
+                }
+
+                self.ui.attach_button.set_text(&qs("Attach"));
             }
             other => log::error!("unexpected target tab index {}", other),
         }
@@ -541,8 +773,23 @@ impl MainWindow {
 
     #[slot(SlotNoArgs)]
     unsafe fn on_kill_clicked(self: &Rc<Self>) {
-        let handle = self.target_handle.replace(None);
-        handle.unwrap().kill();
+        let handle = self.target_handle.replace(None).unwrap();
+        match handle.kill() {
+            Ok(()) => {
+                self.ui.kill_button.set_enabled(false);
+                self.ui.lib_list_gbox.set_enabled(false);
+                self.ui.module_list_gbox.set_enabled(false);
+            }
+            Err(e) => {
+                let err_str = format!("The target process could not be killed to: {}", e);
+                log::error!("{}", err_str);
+                QMessageBox::critical_q_widget2_q_string(
+                    &self.ui.main,
+                    &qs("Failed to kill target"),
+                    &qs(err_str),
+                );
+            }
+        }
     }
 
     // Wrap function to have single error handling branch
@@ -582,26 +829,59 @@ impl MainWindow {
 
     #[slot(SlotNoArgs)]
     unsafe fn on_attach_clicked(self: &Rc<Self>) {
-        let handle = match self.attach() {
-            Ok(p) => p,
-            Err(e) => {
-                let err_str = format!("The target process process could not be attached to: {}", e);
-                log::error!("{}", err_str);
-                QMessageBox::critical_q_widget2_q_string(
-                    &self.ui.main,
-                    &qs("Failed to attach to target"),
-                    &qs(err_str),
-                );
-                return;
+        if self.target_process.borrow().is_some() {
+            let handle = match self.attach() {
+                Ok(p) => p,
+                Err(e) => {
+                    let err_str = format!("The target process could not be attached to: {}", e);
+                    log::error!("{}", err_str);
+                    QMessageBox::critical_q_widget2_q_string(
+                        &self.ui.main,
+                        &qs("Failed to attach to target"),
+                        &qs(err_str),
+                    );
+                    return;
+                }
+            };
+            log::info!("Attached to process {}", handle.get_pid());
+            self.target_handle.replace(Some(handle));
+            self.ui.attach_button.set_enabled(false);
+            self.ui.kill_button.set_enabled(true);
+            self.ui.lib_list_gbox.set_enabled(true);
+            self.ui.module_list_gbox.set_enabled(true);
+            self.ui.t_has_perms.set_text(&qs("Successfully attached"));
+        } else {
+            let mut handle = match self
+                .create_target_cmd()
+                .map_err(InjectorError::from)
+                .and_then(ProcHandle::new)
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    let err_str = format!("The target could not be launched or attached to: {}", e);
+                    log::error!("{}", err_str);
+                    QMessageBox::critical_q_widget2_q_string(
+                        &self.ui.main,
+                        &qs("Failed to launch or attach to target"),
+                        &qs(err_str),
+                    );
+                    return;
+                }
+            };
+
+            let pid = handle.child().as_ref().unwrap().id();
+            match self.probe_pid(Pid::from(pid as usize)) {
+                Ok(()) => {}
+                Err(_) => {
+                    log::info!("Could not locate launched process ({})", pid);
+                    QMessageBox::warning_q_widget2_q_string(
+                        &self.ui.main,
+                        &qs("Process not found"),
+                        &qs("The launched process could not be located. It may have exited immediately."),
+                    );
+                }
             }
-        };
-        log::info!("Attached to process {}", handle.get_pid());
-        self.target_handle.replace(Some(handle));
-        self.ui.attach_button.set_enabled(false);
-        self.ui.kill_button.set_enabled(true);
-        self.ui.lib_list_gbox.set_enabled(true);
-        self.ui.module_list_gbox.set_enabled(true);
-        self.ui.t_has_perms.set_text(&qs("Successfully attached"));
+        }
     }
 
     #[slot(SlotOfInt)]
@@ -631,7 +911,35 @@ impl MainWindow {
     }
     #[slot(SlotNoArgs)]
     unsafe fn on_lib_pick(self: &Rc<Self>) {
-        log::error!("lib picker unimpl")
+        let filter = if cfg!(target_os = "windows") || self.ui.wine_mode_gbox.is_checked() {
+            "Dynamic Link Library (*.dll);;Any file (*)"
+        } else if cfg!(target_os = "macos") {
+            "Dynamic Library (*.dylib);;Any file (*)"
+        } else {
+            "Shared Object (*.so);;Any file(*)"
+        };
+
+        let paths = QFileDialog::get_open_file_names_6a(
+            &self.ui.main,
+            &qs("Select libraries to inject"),
+            &qs(""),
+            &qs(filter),
+            &qs(""),
+            q_file_dialog::Option::DontResolveSymlinks | q_file_dialog::Option::ReadOnly,
+        );
+
+        let list_widget = &self.ui.lib_list;
+
+        while !paths.is_empty() {
+            let file = paths.take_first();
+            if !file.is_empty() {
+                list_widget.add_item_q_string(file.replace_2_q_string(&qs("file://"), &qs("")));
+                let new_item = list_widget.item(list_widget.count() - 1);
+                new_item.set_flags(new_item.flags() | ItemFlag::ItemIsEditable);
+                self.ui.lib_list.set_style_sheet(&qs(""));
+                self.ui.inject_button.set_enabled(true);
+            }
+        }
     }
     #[slot(SlotNoArgs)]
     unsafe fn on_lib_move(self: &Rc<Self>) {
@@ -694,7 +1002,6 @@ impl MainWindow {
             let mod_item: Ptr<QTreeWidgetItem> =
                 QTreeWidgetItem::from_q_tree_widget(&self.ui.module_list).into_ptr();
             mod_item.set_text(0, &qs(path.file_name().unwrap().to_string_lossy()));
-            // Use data rather than text to allow sorting
             mod_item.set_text(1, &QString::number_u64_int(*handle as u64, 16));
         }
     }
@@ -749,7 +1056,20 @@ impl MainWindow {
     unsafe fn on_back_clicked(self: &Rc<Self>) {
         self.target_handle.replace(None);
         self.target_process.replace(None);
+
+        self.ui.t_name.set_text(&qs("Name:"));
+        self.ui.t_pid.set_text(&qs("PID:"));
+        self.ui.t_exe.set_text(&qs("Executable:"));
+        self.ui.t_has_perms.set_text(&qs("Can Attach:"));
+        self.ui.t_status.set_text(&qs("Status:"));
+        self.ui.t_user.set_text(&qs("Owner:"));
+        self.ui.t_type.set_text(&qs("Type:"));
+
+        self.ui
+            .copy_or_launch_button
+            .set_text(&qs("Copy to Launch"));
         self.ui.kill_button.set_enabled(false);
+        self.ui.attach_button.set_text(&qs("Attach"));
         self.ui.attach_button.set_enabled(true);
 
         self.ui.lib_list_gbox.set_enabled(false);

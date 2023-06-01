@@ -34,7 +34,7 @@
 //! [get_port_admin_exploit] function which allows using the exploit to get the task port.
 
 use std::collections::hash_map::DefaultHasher;
-use std::ffi::{CString, OsStr};
+use std::ffi::CString;
 use std::fs;
 use std::fs::File;
 use std::hash::Hasher;
@@ -43,7 +43,7 @@ use std::ops::Deref;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::ptr::{null, null_mut};
 use std::str::from_utf8;
@@ -65,6 +65,7 @@ use sysinfo::{Pid, PidExt, ProcessExt, ProcessRefreshKind, RefreshKind, System, 
 
 use mach_util::mach_portal::MachPortal;
 use mach_util::traps::pid_for_task;
+use mach_util::TempFile;
 
 use macos_portfetch_internal::STATUS_MESSAGES;
 
@@ -100,7 +101,7 @@ pub fn get_port_signed(target: pid_t) -> Result<mach_port_t, std::io::Error> {
 
     // For some reason clippy thinks that the borrow is unnecessary... it isn't
     #[allow(clippy::needless_borrow)]
-    let mut child = Command::new(&bin.0)
+    let mut child = Command::new(bin.as_os_str())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()?;
@@ -123,7 +124,7 @@ pub fn get_port_signed(target: pid_t) -> Result<mach_port_t, std::io::Error> {
 pub fn get_port_signed_admin(target: pid_t) -> Result<mach_port_t, std::io::Error> {
     let bin = create_bin(PORTFETCH_BIN, Some(ENT_XML_PORTFETCH), true)?;
 
-    let (stdin, stdout) = priv_run(&bin.0, &[])?;
+    let (stdin, stdout) = priv_run(&bin, &[])?;
 
     process_child(target, None, stdin, stdout)
 }
@@ -134,7 +135,7 @@ pub fn get_port_signed_admin(target: pid_t) -> Result<mach_port_t, std::io::Erro
 pub fn get_port_admin_exploit(target: pid_t) -> Result<mach_port_t, std::io::Error> {
     let bin = create_bin(PORTFETCH_BIN, Some(ENT_XML_PORTFETCH_EXPL), true)?;
 
-    let (stdin, stdout) = priv_run(&bin.0, &[])?;
+    let (stdin, stdout) = priv_run(&bin, &[])?;
 
     process_child(target, None, stdin, stdout)
 }
@@ -315,38 +316,12 @@ fn priv_run(exe: &Path, args: &[&str]) -> Result<(File, File), std::io::Error> {
     Ok((File::from(pipe_fd), File::from(pipe_fd2)))
 }
 
-struct TempFile(PathBuf);
-impl Drop for TempFile {
-    // Can't really do anything if the file isn't deletable, so ignore errors
-    #[allow(unused_must_use)]
-    fn drop(&mut self) {
-        fs::remove_file(&self.0);
-    }
-}
-
 fn create_bin(bin: &[u8], ent: Option<&str>, hardened: bool) -> Result<TempFile, std::io::Error> {
-    let mut out_bin = PathBuf::from("/tmp");
+    let out_bin = TempFile::random("portfetch", None);
 
-    let ext = {
-        let mut ext_hasher = DefaultHasher::new();
-        if let Some(e) = ent {
-            ext_hasher.write(e.as_bytes());
-        }
-        ext_hasher.write_u8(hardened as u8);
-        ext_hasher.write_u128(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|t| t.as_nanos())
-                .unwrap_or(0),
-        );
-        format!("portfetch-{:x}", ext_hasher.finish())
-    };
-
-    out_bin.push(OsStr::new(ext.as_str()));
-
-    fs::write(&out_bin, bin)?;
+    fs::write(out_bin.as_path(), bin)?;
     // Either running as self or root, so lock perms down as much as possible
-    fs::set_permissions(&out_bin, fs::Permissions::from_mode(0o700))?;
+    fs::set_permissions(out_bin.as_path(), fs::Permissions::from_mode(0o700))?;
 
     if let Some(ent_xml) = ent {
         let mut sign = SigningSettings::default();
@@ -356,11 +331,11 @@ fn create_bin(bin: &[u8], ent: Option<&str>, hardened: bool) -> Result<TempFile,
             sign.add_code_signature_flags(SettingsScope::Main, CodeSignatureFlags::RUNTIME);
         }
         UnifiedSigner::new(sign)
-            .sign_macho(&out_bin, &out_bin)
+            .sign_macho(out_bin.as_path(), out_bin.as_path())
             .map_err(|e| std::io::Error::new(ErrorKind::Other, e.to_string()))?;
     }
 
-    Ok(TempFile(out_bin))
+    Ok(out_bin)
 }
 
 /// Represents a process's `task_for_pid` related security details: whether it is signed with the

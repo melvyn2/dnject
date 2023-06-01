@@ -41,6 +41,7 @@ pub enum InjectorErrorKind {
     TooManyModules,
     RemoteFailure,
     PartialSuccess(usize),
+    PartialSuccessRaw(Vec<*mut libc::c_void>),
     IoError(std::io::ErrorKind),
     Unknown,
 }

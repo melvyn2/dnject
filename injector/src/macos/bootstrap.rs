@@ -13,11 +13,10 @@
 
 use core::ffi::{c_char, c_int, c_uint, c_void};
 use core::intrinsics::unreachable;
+use core::intrinsics::{atomic_store_release, atomic_store_seqcst};
 use core::mem::transmute;
 use core::ptr::{null, null_mut};
-use core::sync::atomic::{fence, AtomicU8, Ordering};
-use std::intrinsics::atomic_store_release;
-use std::ptr::addr_of_mut;
+use core::sync::atomic::AtomicU8;
 
 // Manually use libc types to avoid linking to libc
 pub(crate) type pthread_routine_t = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
@@ -30,10 +29,11 @@ pub(crate) type thread_act_t = mach_port_t;
 const RTLD_NOW: c_int = 0x2;
 
 pub(crate) struct RemoteThreadData {
-    // These should really be atomic...
+    // 0 = dlopen, 1 = dlclose, 2 = exit
+    pub mode: u8,
     // 0 = Not started, 1 = started, 2 = pthread_create failed, 3 = pthread_create successful
     pub bootstrap_status: AtomicU8,
-    // 0 = Not started, 1 = started, 2 = dlopen errored, 3 = finished
+    // 0 = Not started, 1 = started, 2 = dlopen/dlclose errored, 3 = finished
     pub loader_status: AtomicU8,
 
     // Use bottom of stack allocation for TLS base for boostrap thread
@@ -54,12 +54,14 @@ pub(crate) struct RemoteThreadData {
 
     // Loader thread fn pointers
     pub dlopen: unsafe extern "C" fn(*const c_char, c_int) -> *mut c_void,
+    pub dlclose: unsafe extern "C" fn(*mut c_void) -> c_int,
     pub dlerror: unsafe extern "C" fn() -> *mut c_char,
     pub pthread_exit: unsafe extern "C" fn(*mut c_void) -> !,
+    pub libc_exit: unsafe extern "C" fn(c_int) -> !,
 
     // C string pointers to the paths of the injected libraries
-    // Overwritten with module handles on `dlopen` success
-    pub lib_ptrs: [*const c_char; u8::MAX as usize],
+    // OR library module handles (void pointers)
+    pub data: [*const c_char; u8::MAX as usize],
 
     // dlerror string set on loader failure
     pub dlerror_str: [u8; 1024],
@@ -115,10 +117,8 @@ unsafe fn pthread_bootstrap(args_ptr: *mut RemoteThreadData) -> ! {
         args_ptr as *mut c_void,
     ) == 0
     {
-        // atomic_store_release(addr_of_mut!((*args_ptr).loader_status) as *mut u8, 3);
         atomic_store_release((*args_ptr).bootstrap_status.as_ptr(), 3); // Success
     } else {
-        atomic_store_release(addr_of_mut!((*args_ptr).loader_status) as *mut u8, 2);
         atomic_store_release((*args_ptr).bootstrap_status.as_ptr(), 2); // Failure :(
     }
 
@@ -135,7 +135,7 @@ unsafe fn pthread_bootstrap(args_ptr: *mut RemoteThreadData) -> ! {
 
 #[optimize(speed)]
 #[link_section = "__SHELLCODE,__inj_bootstrap"]
-pub(crate) unsafe fn inj_loop(args_ptr: *mut c_void) -> *const c_void {
+pub(crate) unsafe fn pthread_main(args_ptr: *mut c_void) -> *const c_void {
     // SAFETY: `pthread_create` allows one argument, defined as *mut c_void, but doesn't care what it is
     // so we only leave the signature as so for conformance; the only caller should be the boostrap
     // which knows what this pointer should actually be
@@ -145,35 +145,51 @@ pub(crate) unsafe fn inj_loop(args_ptr: *mut c_void) -> *const c_void {
     // atomic_store_release(addr_of_mut!((*args_ptr).loader_status) as *mut u8, 1);
     atomic_store_release((*args_ptr).loader_status.as_ptr(), 1);
 
+    if (*args_ptr).mode >= 2 {
+        // Exit mode
+        let libc_exit: unsafe extern "C" fn(c_int) = transmute((*args_ptr).libc_exit);
+        atomic_store_release((*args_ptr).loader_status.as_ptr(), 3);
+        libc_exit(0);
+        unreachable()
+    }
+
     // Manually index into slice to avoid calling/linking get_mut_unchecked
-    let mut lib_str_ptr: *mut *const c_char = (*args_ptr).lib_ptrs.as_mut_ptr();
+    let mut data_ptr: *mut *const c_char = (*args_ptr).data.as_mut_ptr();
 
     // Avoid calling is_null() as it gets linked in
     #[allow(clippy::cmp_null)]
-    while (*lib_str_ptr) != null() {
-        let ret = ((*args_ptr).dlopen)(*lib_str_ptr, RTLD_NOW);
-        // Re-use the array of string ptrs as an array of module handles
-        *lib_str_ptr = ret as *const c_char;
+    while (*data_ptr) != null() {
+        let ret = if (*args_ptr).mode == 0 {
+            // Inject mode
+            ((*args_ptr).dlopen)(*data_ptr, RTLD_NOW)
+        } else {
+            // Eject mode
+            ((*args_ptr).dlclose)(*data_ptr as *mut c_void) as *mut c_void
+        };
+        // Re-use the array of string ptrs as an array of module handles/return values
+        *data_ptr = ret as *const c_char;
 
-        if ret == null_mut() {
+        // dlopen returns nullptr on fail, dlclose returns 0 on success
+        if ((*args_ptr).mode == 0 && ret == null_mut())
+            || ((*args_ptr).mode == 1 && ret != null_mut())
+        {
             // Try to send back dlerror if it exists
             let dlerror_ptr = ((*args_ptr).dlerror)();
             if dlerror_ptr != null_mut() {
                 cstr_copy(dlerror_ptr, &mut (*args_ptr).dlerror_str);
             }
 
-            // atomic_store_release(addr_of_mut!((*args_ptr).loader_status) as *mut u8, 2);
-            atomic_store_release((*args_ptr).loader_status.as_ptr(), 2);
+            // Use seqcst so that final status is written after rest of struct
+            atomic_store_seqcst((*args_ptr).loader_status.as_ptr(), 2);
 
             pthread_exit_trap(args_ptr)
         }
 
-        lib_str_ptr = lib_str_ptr.add(1);
+        data_ptr = data_ptr.add(1);
     }
 
     // Tell injector that loader thread is done
-    // atomic_store_release(addr_of_mut!((*args_ptr).loader_status) as *mut u8, 3);
-    atomic_store_release((*args_ptr).loader_status.as_ptr(), 3);
+    atomic_store_seqcst((*args_ptr).loader_status.as_ptr(), 3);
 
     pthread_exit_trap(args_ptr)
 }
@@ -196,14 +212,11 @@ unsafe fn cstr_copy(cstr: *mut c_char, buf: &mut [u8]) {
 // Force compiler to emit unreachable trap (`ud2` instruction on x86_64) after pthread_exit
 // to help disassembly and emit memory fence before exit
 #[inline(always)]
-#[optimize(size)]
+#[optimize(speed)]
 #[link_section = "__SHELLCODE,__inj_bootstrap"]
 unsafe fn pthread_exit_trap(args: *const RemoteThreadData) -> ! {
-    // Ensure mem is fully synced before exit
-    fence(Ordering::SeqCst);
     // SAFETY: transmute return value from `!` to `()` to force compiler to emit following unreachable trap
-    let pthread_exit: unsafe extern "C" fn(*mut c_void) =
-        transmute((*args).pthread_exit as *const c_void);
+    let pthread_exit: unsafe extern "C" fn(*mut c_void) = transmute((*args).pthread_exit);
     pthread_exit(null_mut());
     unreachable()
 }

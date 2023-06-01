@@ -24,6 +24,10 @@ pub struct MainUI {
     pub exe_pick: QPtr<QToolButton>,
     pub cwd_path_edit: QPtr<QComboBox>,
     pub cwd_pick: QPtr<QToolButton>,
+    pub inherit_env_checkbox: QPtr<QCheckBox>,
+    pub env_add_button: QPtr<QToolButton>,
+    pub env_del_button: QPtr<QToolButton>,
+    pub env_table: QPtr<QTreeWidget>,
     // Wine mode widgets
     pub wine_mode_gbox: QPtr<QGroupBox>,
     pub wine_prefix: QPtr<QComboBox>,

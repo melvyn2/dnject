@@ -272,7 +272,7 @@
                <number>3</number>
               </property>
               <item row="2" column="1">
-               <widget class="QToolButton" name="env_del_button">
+               <widget class="QToolButton" name="env_add_button">
                 <property name="sizePolicy">
                  <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
                   <horstretch>0</horstretch>
@@ -292,6 +292,9 @@
                 <property name="alternatingRowColors">
                  <bool>true</bool>
                 </property>
+                <property name="selectionMode">
+                 <enum>QAbstractItemView::ExtendedSelection</enum>
+                </property>
                 <property name="rootIsDecorated">
                  <bool>false</bool>
                 </property>
@@ -308,22 +311,6 @@
                   <string>Value</string>
                  </property>
                 </column>
-                <item>
-                 <property name="text">
-                  <string>UI Test Var</string>
-                 </property>
-                 <property name="text">
-                  <string>1</string>
-                 </property>
-                </item>
-                <item>
-                 <property name="text">
-                  <string>UI Test 2</string>
-                 </property>
-                 <property name="text">
-                  <string>/bin</string>
-                 </property>
-                </item>
                </widget>
               </item>
               <item row="0" column="0">
@@ -334,10 +321,13 @@
                 <property name="text">
                  <string>Inherit environment</string>
                 </property>
+                <property name="checked">
+                 <bool>true</bool>
+                </property>
                </widget>
               </item>
               <item row="4" column="1">
-               <widget class="QToolButton" name="env_add_button">
+               <widget class="QToolButton" name="env_del_button">
                 <property name="enabled">
                  <bool>false</bool>
                 </property>
@@ -921,7 +911,7 @@ Drag to reorder and drop files to add them.</string>
              <bool>true</bool>
             </property>
             <property name="selectionMode">
-             <enum>QAbstractItemView::MultiSelection</enum>
+             <enum>QAbstractItemView::ExtendedSelection</enum>
             </property>
             <property name="rootIsDecorated">
              <bool>false</bool>

@@ -23,6 +23,8 @@ sysinfo = "0.29"
 injector = { path = "injector" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+nix = "0.26"
+mach_util = { path = "mach_util" }
 macos_portfetch = { path = "macos_portfetch" }
 
 [build-dependencies]

@@ -1,20 +1,13 @@
-#![feature(io_error_more)]
-#![cfg(target_os = "macos")]
-
+#![allow(dead_code)]
 // Actual test code for macos
 // `macos.rs` and `macos_hardened.rs` have the test-annotated functions, so that tests are ran
 // sequentially and in different binaries
 
-use std::collections::hash_map::DefaultHasher;
-use std::ffi::OsStr;
 use std::fs;
-use std::hash::Hasher;
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Once;
-use std::time::SystemTime;
 
 use libc::pid_t;
 
@@ -22,7 +15,9 @@ use apple_codesign::{CodeSignatureFlags, SettingsScope, SigningSettings, Unified
 
 use injector::ProcHandle;
 
-// Why include and write to disk? CLion's remote running (such asfor i686 mojave VMs) doesn't seem to
+use mach_util::TempFile;
+
+// Why include and write to disk? CLion's remote running (such as for i686 mojave VMs) doesn't seem to
 // account for bindeps, so doesn't copy them into the guest environment. We do it ourselves
 const TESTLIB: &[u8] = include_bytes!(env!("CARGO_CDYLIB_FILE_TESTLIB"));
 const TESTBIN: &[u8] = include_bytes!(env!("CARGO_BIN_FILE_TESTBIN"));
@@ -70,7 +65,7 @@ pub fn test_inject_hardened() {
 
     // For some reason clippy thinks that the borrow is unnecessary... it isn't
     #[allow(clippy::needless_borrow)]
-    let mut proc = Command::new(&bin.0);
+    let mut proc = Command::new(bin.as_os_str());
     proc.stdout(Stdio::piped());
     proc.stderr(Stdio::inherit());
     let mut child = proc.spawn().unwrap();
@@ -98,7 +93,7 @@ pub fn test_inject_hardened() {
     assert_eq!(child.try_wait().unwrap(), None);
 
     // Inject (duh)
-    handle.inject(&[lib.0.clone()]).unwrap_or_else(|e| {
+    handle.inject(&[lib.clone()]).unwrap_or_else(|e| {
         let _ = child.kill();
         Err(e).unwrap()
     });
@@ -116,7 +111,7 @@ pub fn test_inject() {
 
     // For some reason clippy thinks that the borrow is unnecessary... it isn't
     #[allow(clippy::needless_borrow)]
-    let mut proc = Command::new(&bin.0);
+    let mut proc = Command::new(bin.as_os_str());
     proc.stdout(Stdio::piped());
     proc.stderr(Stdio::inherit());
     let mut child = proc.spawn().unwrap();
@@ -143,7 +138,7 @@ pub fn test_inject() {
     assert_eq!(child.try_wait().unwrap(), None);
 
     // Inject (duh)
-    handle.inject(&[lib.0.clone()]).unwrap_or_else(|e| {
+    handle.inject(&[lib.clone()]).unwrap_or_else(|e| {
         let _ = child.kill();
         Err(e).unwrap()
     });
@@ -165,39 +160,15 @@ pub fn test_inject() {
     let _ = child.kill();
 }
 
-// Ensure temp re-signed files are deleted
-struct TempFile(PathBuf);
-impl Drop for TempFile {
-    // Can't really do anything if the file isn't deletable, so ignore errors
-    #[allow(unused_must_use)]
-    fn drop(&mut self) {
-        fs::remove_file(&self.0);
-    }
-}
-
 fn create_bin(
     bin: &[u8],
     ent: Option<&str>,
     hardened: bool,
 ) -> Result<TempFile, Box<dyn std::error::Error>> {
-    let mut out_bin = PathBuf::from("/tmp");
+    let out_bin = TempFile::random("injtest", None);
 
-    // Set ext to hash of inputs, to avoid collision with parallel tests
-    let ext = {
-        let mut ext_hasher = DefaultHasher::new();
-        ext_hasher.write_u128(
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap(),
-        );
-        format!("injtest-{:x}", ext_hasher.finish())
-    };
-
-    out_bin.push(OsStr::new(ext.as_str()));
-
-    fs::write(&out_bin, bin)?;
-    fs::set_permissions(&out_bin, fs::Permissions::from_mode(0o700))?;
+    fs::write(out_bin.as_path(), bin)?;
+    fs::set_permissions(out_bin.as_path(), fs::Permissions::from_mode(0o700))?;
 
     if let Some(ent_xml) = ent {
         let mut sign = SigningSettings::default();
@@ -205,8 +176,8 @@ fn create_bin(
         if hardened {
             sign.add_code_signature_flags(SettingsScope::Main, CodeSignatureFlags::RUNTIME);
         }
-        UnifiedSigner::new(sign).sign_macho(&out_bin, &out_bin)?;
+        UnifiedSigner::new(sign).sign_macho(out_bin.as_path(), out_bin.as_path())?;
     }
 
-    Ok(TempFile(out_bin))
+    Ok(out_bin)
 }

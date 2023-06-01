@@ -166,7 +166,7 @@ fn main() {
                 RefreshKind::new().with_processes(ProcessRefreshKind::new()),
             );
 
-            if system.process(sysinfo::Pid::from_u32(pid)).is_none() {
+            if system.process(sysinfo::Pid::from(pid as usize)).is_none() {
                 eprintln!("Could not find process with pid {}", pid);
                 exit(3)
             }

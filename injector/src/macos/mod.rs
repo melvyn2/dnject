@@ -9,7 +9,7 @@ use std::sync::atomic::{fence, AtomicU8, Ordering};
 use std::thread::sleep;
 use std::time::Duration;
 
-use libc::{kill, pid_t, SIGKILL, _SC_PAGESIZE};
+use libc::{pid_t, _SC_PAGESIZE};
 
 use mach2::boolean::boolean_t;
 use mach2::mach_port::mach_port_deallocate;
@@ -62,8 +62,8 @@ fn ensure_matching_arch(target: pid_t) -> Result<(), InjectorError> {
 ///       from the injector. The created mach thread (bootstrap thread) spawns a full bsd/pthread
 ///       thread (loader thread).
 /// 3. Load modules
-///     - The loader thread then calls [dlopen](libc::dlopen) on all the requested modules.
-// or [dlclose](libc::dlclose) when ejecting. (TODO)
+///     - The loader thread then calls [dlopen](libc::dlopen) on the requested modules when injecting
+///       or [dlclose](libc::dlclose) when ejecting.
 /// # Codesigning and entitlements on macOS
 /// Apple has gradually made interacting with foreign processes more difficult with each iteration of
 /// macOS. Each of the above steps is affected:
@@ -107,16 +107,16 @@ impl TryFrom<pid_t> for ProcHandle {
         ensure_matching_arch(target)?;
         log::trace!("Validated matching target process architecture");
 
-        let mut task_port: libc::mach_port_t = 0;
+        let mut task_port: mach_port_t = 0;
         match unsafe { task_for_pid(mach_task_self(), target, &mut task_port) } {
-                libc::KERN_SUCCESS => Ok(()),
-                libc::KERN_FAILURE => Err(InjectorError::new(InjectorErrorKind::AttachPermission,
+            mach2::kern_return::KERN_SUCCESS => Ok(()),
+            mach2::kern_return::KERN_FAILURE => Err(InjectorError::new(InjectorErrorKind::AttachPermission,
       "task_for_pid returned KERN_FAILURE. \
             Ensure you have the proper permissions and check Console.app for `macOSTaskPolicy` entries.")),
-                other => Err(InjectorError::new(InjectorErrorKind::AttachFailure,
-                                    format!("`task_for_pid({})` returned unknown code 0x{:x}: {}",
-                                            target, other,
-                                            unsafe {CStr::from_ptr(mach_error_string(other))}.to_string_lossy())))
+            other => Err(InjectorError::new(InjectorErrorKind::AttachFailure,
+                                format!("`task_for_pid({})` returned unknown code 0x{:x}: {}",
+                                        target, other,
+                                        unsafe {CStr::from_ptr(mach_error_string(other))}.to_string_lossy())))
             }?;
 
         log::trace!(
@@ -165,11 +165,6 @@ impl TryFrom<mach_port_t> for ProcHandle {
 }
 
 impl ProcHandle {
-    /// Attempt to use an existing task port to gain access to a target
-    /// # Safety
-    /// Caller must ensure that the given `mach_port_t` is not in use elsewhere/is fully moved,
-    /// to avoid deallocation during use by caller or struct. (See [TaskPort])
-
     /// Spawns a child process using `cmd`, retains the [Child] handle, and
     /// attempts to gain the task port with [task_for_pid]
     pub fn new(cmd: Command) -> Result<Self, InjectorError> {
@@ -227,10 +222,7 @@ impl ProcHandle {
     /// As with [inject](Self::inject), library paths are canonicalize before injection, so
     /// paths can be relative to the current working directory of the injector.
     #[cfg(feature = "test_broken")] // This is broken and useless
-    pub fn new_pre_inject(
-        cmd: Command,
-        libs: &[PathBuf],
-    ) -> Result<ProcHandle, Box<dyn std::error::Error>> {
+    pub fn new_pre_inject(cmd: Command, libs: &[PathBuf]) -> Result<ProcHandle, InjectorError> {
         use libc::{MAP_ANONYMOUS, MAP_FAILED, MAP_SHARED, PROT_READ, PROT_WRITE, RTLD_NOW};
         use spawn_task_port::CommandSpawnWithTask;
         use std::cmp::min;
@@ -239,13 +231,13 @@ impl ProcHandle {
         use std::ptr::null_mut;
 
         if libs.len() >= u8::MAX as usize {
-            return Err(Box::new(std::io::Error::new(
-                ErrorKind::ArgumentListTooLong,
+            return Err(InjectorError::new(
+                InjectorErrorKind::TooManyModules,
                 format!(
                     "too many libraries for a single new_pre_inject call (max {})",
                     u8::MAX - 1
                 ),
-            )));
+            ));
         }
 
         let mut cmd = cmd;
@@ -279,10 +271,10 @@ impl ProcHandle {
             );
             if addr == MAP_FAILED {
                 let mmap_err = std::io::Error::last_os_error();
-                return Err(Box::new(std::io::Error::new(
-                    mmap_err.kind(),
+                return Err(InjectorError::new(
+                    InjectorErrorKind::IoError(mmap_err.kind()),
                     format!("mmap failed: {}", mmap_err),
-                )));
+                ));
             }
             let addr = addr as *mut SharedMem;
             std::ptr::write(addr, source);
@@ -336,7 +328,7 @@ impl ProcHandle {
                         // The error code (but not string) is returned to the caller
                         // as if the target child had exited with it
                         // Should find some obscure code and use it
-                        return Err(std::io::Error::from(ErrorKind::Unsupported));
+                        return Err(std::io::Error::from(std::io::ErrorKind::Unsupported));
                     }
                     // Store the handle
                     shared_map.handles[idx] = res;
@@ -416,10 +408,13 @@ impl ProcHandle {
                                 .unwrap_or("dlerror message unparseable too".into())
                         );
                     }
-                    Err(Box::new(std::io::Error::new(ErrorKind::Other, error_msg)))
+                    Err(InjectorError::new(
+                        InjectorErrorKind::PartialSuccess(shared_map.successes as usize),
+                        error_msg,
+                    ))
                 } else {
                     // Either loader did not run or ran successfully; error unrelated
-                    Err(Box::new(e))
+                    Err(e)?
                 }
             }
         };
@@ -437,37 +432,124 @@ impl ProcHandle {
             ));
         }
 
-        // Create the buffer holding the path strings and the pointers to each string
-        let (paths_buf, paths_buf_offsets): (Vec<u8>, Vec<usize>) = {
-            let mut buf = vec![];
-            let mut offsets: Vec<usize> = vec![];
-            for path in libs.iter() {
-                offsets.push(buf.len());
-                buf.extend_from_slice(
-                    CString::new(
-                        path.clone()
-                            .canonicalize()
-                            .map_err(|e| {
-                                std::io::Error::new(
-                                    e.kind(),
-                                    format!("{}: {}", path.to_string_lossy(), e),
-                                )
-                            })?
-                            .into_os_string()
-                            .as_bytes(),
-                    )
-                    .unwrap()
-                    .as_bytes_with_nul(),
-                );
+        return match self.do_remote(Some(libs), None) {
+            Ok(h) => {
+                let new_handles = h.unwrap();
+                let mut new_modules: Vec<ModHandle> =
+                    std::iter::zip(libs.iter().cloned(), new_handles.into_iter()).collect();
+                self.modules.append(&mut new_modules);
+
+                Ok(())
+            },
+            Err(ref e) if let InjectorErrorKind::PartialSuccessRaw(new_handles) = e.kind() =>  {
+                let mut new_modules: Vec<ModHandle> =
+                    std::iter::zip(libs.iter().cloned(), new_handles.iter().cloned()).collect();
+                self.modules.append(&mut new_modules);
+
+                Err(InjectorError::new(InjectorErrorKind::PartialSuccess(new_handles.len()), e.to_string()))
+            },
+            Err(e) => Err(e)
+        };
+    }
+
+    /// Ejects the given [ModHandle]s if they are owned by this instance
+    pub fn eject(&mut self, handles: &[ModHandle]) -> Result<(), InjectorError> {
+        // Get vec of ModHandles whose raw handles aren't owned by this struct
+        let mut owned_mods = self.modules.clone();
+        let mut non_owned: Vec<&ModHandle> = Vec::new();
+        let mut non_owned_idx: Vec<usize> = Vec::new();
+        // This is necessary to remove one match at a time rather than all matches
+        for (idx, target) in handles.iter().enumerate() {
+            if let Some(p) = owned_mods.iter().position(|c| c.1 == target.1) {
+                owned_mods.remove(p);
+            } else {
+                non_owned_idx.push(idx);
+                non_owned.push(target);
             }
-            (buf, offsets)
+        }
+
+        if !non_owned.is_empty() {
+            return Err(InjectorError::new(
+                InjectorErrorKind::ModuleHandlesNotOwned(non_owned_idx),
+                format!("non-owned ModHandle cannot be ejected: {:?}", non_owned),
+            ));
         };
 
-        log::trace!(
-            "Created string buffer for {} library paths ({} bytes)",
-            paths_buf_offsets.len(),
-            paths_buf.len()
-        );
+        let raw_handles = handles.iter().map(|m| m.1).collect::<Vec<*mut c_void>>();
+        match unsafe { self.eject_raw(&raw_handles) } {
+            Ok(()) => {
+                self.modules = owned_mods;
+                Ok(())
+            }
+            Err(e) if let InjectorErrorKind::PartialSuccessRaw(ejected_handles) = e.kind().clone() => {
+                for handle in ejected_handles.iter() {
+                    // Remove matching handles if they exist
+                    // Duplicate handles can exist and only one should be removed for each ejection
+                    if let Some(pos) = self.modules.iter().position(|h| &h.1 == handle) {
+                        self.modules.remove(pos);
+                    }
+                }
+                Err(InjectorError::new(InjectorErrorKind::PartialSuccess(ejected_handles.len()), e.to_string()))
+            }
+            Err(e) => Err(e)
+        }
+    }
+
+    /// Closes the given raw dlopen handles. This is not guaranteed to unload the associated modules
+    /// as they are reference counted (dlclose must be called once for each dlopen call of a library)
+    /// # Safety
+    /// The caller must ensure that the handle is valid for the target process
+    pub unsafe fn eject_raw(&mut self, handles: &[*mut c_void]) -> Result<(), InjectorError> {
+        self.do_remote(None, Some(handles)).map(|_| ())
+    }
+
+    /// This is the mega-function that actually does stuff in the target.
+    /// If lib_paths is Some, inject said library paths. If eject_handles is Some, eject said handles.
+    /// If both are None, call exit in the target process.
+    fn do_remote(
+        &mut self,
+        lib_paths: Option<&[PathBuf]>,
+        eject_handles: Option<&[*mut c_void]>,
+    ) -> Result<Option<Vec<*mut c_void>>, InjectorError> {
+        if lib_paths.is_some() && eject_handles.is_some() {
+            unreachable!()
+        }
+
+        // Create the buffer holding the path strings and the pointers to each string
+        let (paths_buf, paths_buf_offsets): (Vec<u8>, Vec<usize>) = {
+            if let Some(libs) = lib_paths {
+                let mut buf = vec![];
+                let mut offsets: Vec<usize> = vec![];
+                for path in libs.iter() {
+                    offsets.push(buf.len());
+                    buf.extend_from_slice(
+                        CString::new(
+                            path.clone()
+                                .canonicalize()
+                                .map_err(|e| {
+                                    std::io::Error::new(
+                                        e.kind(),
+                                        format!("{}: {}", path.to_string_lossy(), e),
+                                    )
+                                })?
+                                .into_os_string()
+                                .as_bytes(),
+                        )
+                        .unwrap()
+                        .as_bytes_with_nul(),
+                    );
+                }
+                log::trace!(
+                    "Created string buffer for {} library paths ({} bytes)",
+                    offsets.len(),
+                    buf.len()
+                );
+
+                (buf, offsets)
+            } else {
+                (vec![], vec![])
+            }
+        };
 
         // Extract shellcode from self
         let (code_seg_ptr, code_seg_size): (*mut u8, c_ulong) = {
@@ -506,7 +588,7 @@ impl ProcHandle {
             unsafe { (bootstrap::bootstrap_entry as *const c_void).byte_offset_from(code_seg_ptr) };
         // Offset into the allocated code section from which pthread_entrypoint will be calculated
         let seg_pthread_routine_offset =
-            unsafe { (bootstrap::inj_loop as *const c_void).byte_offset_from(code_seg_ptr) };
+            unsafe { (bootstrap::pthread_main as *const c_void).byte_offset_from(code_seg_ptr) };
         assert!(
             seg_ip_offset < code_seg_size as isize,
             "bootstrap initial instruction pointer offset is larger than segment"
@@ -573,20 +655,32 @@ impl ProcHandle {
         };
         log::trace!("Mapped data segment into target at 0x{:x}", remote_data_ptr);
 
-        // Calculate the final string pointers
-        let lib_ptrs: [*const c_char; u8::MAX as usize] = unsafe {
-            let mut r = paths_buf_offsets
-                .iter()
-                .map(|&str_offset| {
-                    (remote_data_ptr as *mut c_void)
-                        .byte_add(size_of::<bootstrap::RemoteThreadData>() + str_offset)
-                        as *const c_char
-                })
-                .collect::<Vec<*const c_char>>();
+        let data_arr: [*const c_char; u8::MAX as usize] = {
+            let mut r = if !paths_buf.is_empty() {
+                // Calculate the final string pointers
+                unsafe {
+                    paths_buf_offsets
+                        .iter()
+                        .map(|&str_offset| {
+                            (remote_data_ptr as *mut c_void)
+                                .byte_add(size_of::<bootstrap::RemoteThreadData>() + str_offset)
+                                as *const c_char
+                        })
+                        .collect::<Vec<*const c_char>>()
+                }
+            } else if let Some(handles) = eject_handles {
+                handles
+                    .iter()
+                    .map(|&h| h as *const c_char)
+                    .collect::<Vec<*const c_char>>()
+            } else {
+                vec![]
+            };
             // 0-extend to full length
-            r.extend_from_slice(&vec![null(); u8::MAX as usize - paths_buf_offsets.len()]);
+            r.extend_from_slice(&vec![null(); u8::MAX as usize - r.len()]);
             r.try_into().unwrap()
         };
+
         let pthread_entrypoint_fnptr: bootstrap::pthread_routine_t = unsafe {
             std::mem::transmute(
                 (remote_code_ptr as *mut c_void).byte_offset(seg_pthread_routine_offset)
@@ -627,6 +721,12 @@ impl ProcHandle {
                 .cast::<bootstrap::RemoteThreadData>()
                 .as_uninit_mut()
                 .write(bootstrap::RemoteThreadData {
+                    mode: match (lib_paths.is_some(), eject_handles.is_some()) {
+                        (true, false) => 0,
+                        (false, true) => 1,
+                        (false, false) => 2,
+                        (true, true) => unreachable!(),
+                    },
                     bootstrap_status: AtomicU8::new(0),
                     loader_status: AtomicU8::new(0),
                     tsd_base: remote_stack_ptr as *mut c_void,
@@ -636,19 +736,23 @@ impl ProcHandle {
                     pthread_create_from_mach_thread: pthread_create_from_mach_thread_fnptr,
                     pthread_exit: libc::pthread_exit,
                     dlopen: libc::dlopen,
+                    dlclose: libc::dlclose,
                     dlerror: libc::dlerror,
+                    libc_exit: libc::exit,
                     pthread_entrypoint: pthread_entrypoint_fnptr,
-                    lib_ptrs,
+                    data: data_arr,
                     dlerror_str: [0; 1024],
                 });
-            copy_nonoverlapping(
-                paths_buf.as_ptr(),
-                local_data
-                    .cast::<u8>()
-                    .as_ptr()
-                    .add(size_of::<bootstrap::RemoteThreadData>()),
-                paths_buf.len(),
-            );
+            if !paths_buf.is_empty() {
+                copy_nonoverlapping(
+                    paths_buf.as_ptr(),
+                    local_data
+                        .cast::<u8>()
+                        .as_ptr()
+                        .add(size_of::<bootstrap::RemoteThreadData>()),
+                    paths_buf.len(),
+                );
+            }
             fence(Ordering::Release);
         };
         log::trace!("Wrote data struct and c-strings");
@@ -791,7 +895,14 @@ impl ProcHandle {
 
         let mut timeout = 0;
         let mut status = 0;
-        while timeout <= libs.len()
+        let max_time = if let Some(libs) = lib_paths {
+            libs.len()
+        } else if let Some(handles) = eject_handles {
+            handles.len()
+        } else {
+            10
+        };
+        while timeout <= max_time
             && unsafe {
                 status = local_data
                     .cast::<bootstrap::RemoteThreadData>()
@@ -807,7 +918,7 @@ impl ProcHandle {
 
         // Ensure that non-atomic struct members have been fully written
         fence(Ordering::SeqCst);
-        let ret = match status {
+        let dlerror = match status {
             0 => {
                 return Err(InjectorError::new(
                     InjectorErrorKind::RemoteFailure,
@@ -821,21 +932,36 @@ impl ProcHandle {
                 ));
             }
             2 => {
-                log::error!("Loader thread failed to load all libraries, retrieving error");
+                log::error!("Loader thread failed to load or eject all modules, retrieving error");
                 // SAFETY: 2 is a completed status, so this thread is sole accessor of data struct
                 let handles = unsafe {
                     local_data
                         .cast::<bootstrap::RemoteThreadData>()
                         .as_ref()
-                        .lib_ptrs
+                        .data
                 };
-                // status 2 is dlopen null retval, so look in handles for null
+                // status 2 is dlopen null return value or dlclose non-zero return value,
+                // so look in handles for null/non-zero
                 let fail_idx = handles
                     .iter()
                     .enumerate()
-                    .find_map(|(i, h)| if h.is_null() { Some(i) } else { None })
+                    .find_map(|(i, h)| {
+                        if h.is_null() ^ eject_handles.is_some() {
+                            Some(i)
+                        } else {
+                            None
+                        }
+                    })
                     .unwrap();
-                let mut err_str = format!("dlopen failed for library {}", fail_idx);
+                let mut err_str = format!(
+                    "{} failed for module {}",
+                    if lib_paths.is_some() {
+                        "dlopen"
+                    } else {
+                        "dlclose"
+                    },
+                    fail_idx
+                );
 
                 // Load dlerror if it exists
                 let dlerror_str = unsafe {
@@ -848,21 +974,27 @@ impl ProcHandle {
                     // It feels stupid calling .to_string().as_str() but whatever
                     err_str += CStr::from_bytes_until_nul(&dlerror_str)
                         .map(|cstr| format!(": {}", cstr.to_string_lossy()))
-                        .unwrap_or(format!(
-                            ": {} (dlerror string unparseable)",
-                            libs[fail_idx].to_string_lossy()
-                        ))
+                        .unwrap_or_else(|_err| {
+                            if let Some(libs) = lib_paths {
+                                format!(
+                                    ": {} (dlerror string unparseable)",
+                                    libs[fail_idx].to_string_lossy()
+                                )
+                            } else {
+                                format!(
+                                    "0x{:x} (dlerror string unparseable)",
+                                    eject_handles.unwrap()[fail_idx] as usize
+                                )
+                            }
+                        })
                         .as_str();
                 }
 
-                Err(InjectorError::new(
-                    InjectorErrorKind::PartialSuccess(fail_idx),
-                    err_str,
-                ))
+                Some(err_str)
             }
             3 => {
                 log::trace!("Loader thread succeeded");
-                Ok(())
+                None
             }
             other => {
                 return Err(InjectorError::new(
@@ -872,35 +1004,79 @@ impl ProcHandle {
             }
         };
 
-        // Loader process has exited and memory barrier passed, safe to read struct
-        let handles = unsafe {
-            local_data
-                .cast::<bootstrap::RemoteThreadData>()
-                .as_ref()
-                .lib_ptrs
-        }
-        .into_iter()
-        .map(|h| h as *mut c_void)
-        .take_while(|h| !h.is_null());
+        let ret = if let Some(libs) = lib_paths {
+            // Loader process has exited and memory barrier passed, safe to read struct
+            let new_handles = unsafe {
+                local_data
+                    .cast::<bootstrap::RemoteThreadData>()
+                    .as_ref()
+                    .data
+            }
+            .into_iter()
+            .map(|h| h as *mut c_void)
+            .take_while(|h| !h.is_null())
+            .collect::<Vec<*mut c_void>>();
 
-        let mut new_modules: Vec<ModHandle> =
-            std::iter::zip(libs.iter().cloned(), handles).collect();
+            if log::max_level() == log::LevelFilter::Trace {
+                log::trace!(
+                    "Got back {} module handles: {:?}",
+                    new_handles.len(),
+                    &new_handles
+                );
+            } else {
+                log::info!(
+                    "Successfully injected {} modules of {}",
+                    new_handles.len(),
+                    libs.len()
+                );
+            }
 
-        if log::max_level() == log::LevelFilter::Trace {
-            log::trace!(
-                "Got back {} module handles: {:?}",
-                new_modules.len(),
-                &new_modules
-            );
+            if let Some(dlerror) = dlerror {
+                Err(InjectorError::new(
+                    InjectorErrorKind::PartialSuccessRaw(new_handles),
+                    dlerror,
+                ))
+            } else {
+                assert_eq!(libs.len(), new_handles.len());
+                Ok(Some(new_handles))
+            }
+        } else if let Some(to_eject) = eject_handles {
+            let ejected_handles = unsafe {
+                local_data
+                    .cast::<bootstrap::RemoteThreadData>()
+                    .as_ref()
+                    .data
+            }[..to_eject.len()]
+                .iter()
+                .take_while(|&&r| r as c_int == 0)
+                .count();
+
+            if log::max_level() == log::LevelFilter::Trace {
+                log::trace!(
+                    "Ejected {} module handles: {:?}",
+                    ejected_handles,
+                    &to_eject[..ejected_handles]
+                );
+            } else {
+                log::info!(
+                    "Successfully injected {} modules of {}",
+                    ejected_handles,
+                    to_eject.len()
+                );
+            }
+
+            if let Some(dlerror) = dlerror {
+                Err(InjectorError::new(
+                    InjectorErrorKind::PartialSuccessRaw(to_eject[..ejected_handles].to_vec()),
+                    dlerror,
+                ))
+            } else {
+                assert_eq!(to_eject.len(), ejected_handles);
+                Ok(None)
+            }
         } else {
-            log::info!(
-                "Successfully injected {} modules of {}",
-                new_modules.len(),
-                libs.len()
-            );
-        }
-
-        self.modules.append(&mut new_modules);
+            Ok(None)
+        };
 
         // Deallocation time
         unsafe {
@@ -926,57 +1102,6 @@ impl ProcHandle {
         ret
     }
 
-    /// Ejects the given [ModHandle]s if they are owned by this instance
-    #[doc(hidden)]
-    pub fn eject(&mut self, handles: &[ModHandle]) -> Result<(), InjectorError> {
-        // Get vec of ModHandles whose raw handles aren't owned by this struct
-        let mut owned_mods = self.modules.clone();
-        let mut non_owned: Vec<&ModHandle> = Vec::new();
-        let mut non_owned_idx: Vec<usize> = Vec::new();
-        // This is necessary to remove one match at a time rather than all matches
-        for (idx, target) in handles.iter().enumerate() {
-            if let Some(p) = owned_mods.iter().position(|c| c.1 == target.1) {
-                owned_mods.remove(p);
-            } else {
-                non_owned_idx.push(idx);
-                non_owned.push(target);
-            }
-        }
-
-        if !non_owned.is_empty() {
-            return Err(InjectorError::new(
-                InjectorErrorKind::ModuleHandlesNotOwned(non_owned_idx),
-                format!("non-owned ModHandle cannot be ejected: {:?}", non_owned),
-            ));
-        };
-
-        let raw_handles = handles.iter().map(|m| m.1).collect::<Vec<*mut c_void>>();
-        match unsafe { self.eject_raw(&raw_handles) } {
-            Ok(()) => {
-                self.modules = owned_mods;
-                Ok(())
-            }
-            Err(e) => {
-                if let InjectorErrorKind::PartialSuccess(idx) = e.kind() {
-                    self.modules = self.modules.split_off(*idx);
-                }
-                Err(e)
-            }
-        }
-    }
-
-    /// Closes the given raw dlopen handles. This is not guaranteed to unload the associated modules
-    /// as they are reference counted (dlclose must be called once for each dlopen call of a library)
-    /// # SAFETY
-    /// The caller must ensure that the handle is valid for the target process
-    #[doc(hidden)]
-    pub unsafe fn eject_raw(&mut self, _handles: &[*mut c_void]) -> Result<(), InjectorError> {
-        Err(InjectorError::new(
-            InjectorErrorKind::Unknown,
-            "not yet impl",
-        ))
-    }
-
     /// Returns a reference counted copy of the underlying task port. The port refcount is incremented,
     /// so the consumer must call mach_port_deallocate
     pub fn get_task_port(&self) -> mach_port_t {
@@ -993,19 +1118,16 @@ impl ProcHandle {
         &self.modules
     }
 
-    /// Returns the owned [Child] handle to the underlying process, if one exists. Effective only
-    /// when initialized with [new](Self::new)
+    /// Returns the [Child] handle to the underlying process, if one exists. Use [take](Option::take)
+    /// to assume ownership. Effective only when initialized with [new](Self::new)
     // or [new_pre_inject](Self::new)
-    pub fn take_proc_child(&mut self) -> Option<Child> {
-        self.child_handle.take()
+    pub fn child(&mut self) -> &mut Option<Child> {
+        &mut self.child_handle
     }
 
-    /// Kill target process forcefully (not yet impl)
-    #[doc(hidden)]
-    pub fn kill(self) {
-        // TODO use mach APIs and task port instead
-        unsafe { kill(self.pid, SIGKILL) };
-        drop(self);
+    /// Cause target process to call `exit`
+    pub fn kill(mut self) -> Result<(), InjectorError> {
+        self.do_remote(None, None).map(|_| drop(self))
     }
 }
 

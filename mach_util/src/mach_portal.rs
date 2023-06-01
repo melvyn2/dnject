@@ -16,8 +16,8 @@ use mach2::port::{mach_port_t, MACH_PORT_NULL, MACH_PORT_RIGHT_RECEIVE};
 use mach2::task::{task_get_special_port, TASK_BOOTSTRAP_PORT};
 use mach2::traps::mach_task_self;
 
-use crate::mach_try;
 use crate::bsm::audit_token_to_pid;
+use crate::mach_try;
 use crate::message::{
     mach_msg_recv_t, mach_msg_send_t, MACH_MSGH_BITS_REMOTE, MACH_RCV_TRAILER_AUDIT,
     MACH_RCV_TRAILER_ELEMENTS, MACH_RCV_TRAILER_TYPE,
@@ -151,7 +151,7 @@ impl MachPortal {
             r.assume_init()
         };
 
-        let recv_pid = unsafe {audit_token_to_pid(msg.msg_trailer.msgh_audit)};
+        let recv_pid = unsafe { audit_token_to_pid(msg.msg_trailer.msgh_audit) };
 
         Ok((msg.task_port.name, recv_pid as pid_t))
     }

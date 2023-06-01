@@ -1,6 +1,14 @@
 #![feature(extern_types)]
+#![feature(negative_impls)]
 
 //! C-defs which aren't included in mach2, as well as helper classes
+
+use std::collections::hash_map::DefaultHasher;
+use std::fmt::Display;
+use std::hash::Hasher;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 // Re-export for macro use
 #[doc(hidden)]
@@ -121,5 +129,52 @@ pub fn get_pid_cpu_type(pid: libc::pid_t) -> Result<libc::cpu_type_t, std::io::E
         }
     } else {
         Ok(cpu_type)
+    }
+}
+
+pub struct TempFile {
+    inner: PathBuf,
+}
+
+impl TempFile {
+    pub fn from<P: AsRef<Path>>(path: P) -> Self {
+        Self {
+            inner: path.as_ref().to_path_buf(),
+        }
+    }
+
+    pub fn random<S: Display>(prefix: S, ext: Option<S>) -> Self {
+        let mut hasher = DefaultHasher::new();
+        hasher.write_u128(
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap(),
+        );
+        let ext = ext.map(|s| format!(".{}", s)).unwrap_or_else(String::new);
+        Self::from(PathBuf::from(format!(
+            "/tmp/{}-{:x}{}",
+            prefix,
+            hasher.finish(),
+            ext
+        )))
+    }
+}
+
+impl !Clone for TempFile {}
+
+impl Deref for TempFile {
+    type Target = PathBuf;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl Drop for TempFile {
+    // Can't really do anything if the file isn't deletable, so ignore errors
+    #[allow(unused_must_use)]
+    fn drop(&mut self) {
+        std::fs::remove_file(&self.inner);
     }
 }
