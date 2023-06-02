@@ -1088,7 +1088,8 @@ impl ProcHandle {
                 Ok(None)
             }
         } else {
-            Ok(None)
+            // Skip deallocation cause process is dead
+            return Ok(None);
         };
 
         // Deallocation time
@@ -1140,7 +1141,21 @@ impl ProcHandle {
 
     /// Cause target process to call `exit`
     pub fn kill(mut self) -> Result<(), InjectorError> {
-        self.do_remote(None, None).map(|_| drop(self))
+        match self.do_remote(None, None) {
+            Ok(_) => {
+                if let Some(mut c) = self.child_handle.take() {
+                    c.try_wait()?.ok_or_else(|| {
+                        InjectorError::new(
+                            InjectorErrorKind::Unknown,
+                            "child still running after successful exit",
+                        )
+                    })?;
+                }
+                drop(self);
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 }
 

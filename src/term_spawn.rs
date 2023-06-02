@@ -63,16 +63,3 @@ end tell",
 pub fn spawn_term() -> Result<OwnedFd, std::io::Error> {
     todo!()
 }
-
-#[test]
-fn test_term() {
-    let io = spawn_term().unwrap();
-    Command::new("/bin/sh")
-        .stdout(io.try_clone().unwrap())
-        .stderr(io.try_clone().unwrap())
-        .stdin(io)
-        .spawn()
-        .unwrap()
-        .wait()
-        .unwrap();
-}

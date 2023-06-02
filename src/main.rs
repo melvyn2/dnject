@@ -8,7 +8,7 @@ use std::io::ErrorKind;
 use std::mem::transmute;
 use std::ops::Deref;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Child, Command};
 use std::ptr::null_mut;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -112,6 +112,7 @@ struct MainWindow {
     system_data: RefCell<System>,
     wine_prefix_saved: RefCell<String>,
     wine_loc_saved: RefCell<String>,
+    child_handle: RefCell<Option<Child>>,
     target_process: RefCell<Option<Pid>>,
     target_handle: RefCell<Option<ProcHandle>>,
     process_refresh_timer: RefCell<Option<QBox<QTimer>>>,
@@ -130,6 +131,7 @@ impl MainWindow {
             system_data: RefCell::new(System::new_with_specifics(RefreshKind::new())),
             wine_prefix_saved: RefCell::new("".to_string()),
             wine_loc_saved: RefCell::new("".to_string()),
+            child_handle: RefCell::default(),
             target_process: RefCell::default(),
             target_handle: RefCell::default(),
             process_refresh_timer: RefCell::default(),
@@ -724,6 +726,9 @@ impl MainWindow {
                     }
                 }
 
+                self.child_handle.replace(Some(child));
+
+                self.ui.copy_or_launch_button.set_enabled(false);
                 self.ui.attach_button.set_text(&qs("Attach"));
             }
             other => log::error!("unexpected target tab index {}", other),
@@ -743,24 +748,16 @@ impl MainWindow {
         };
         let mut system = self.system_data.borrow_mut();
 
-        system.refresh_specifics(
-            RefreshKind::new()
-                .with_processes(ProcessRefreshKind::new())
-                .with_users_list(),
-        );
-
-        let proc = match system.process(pid) {
-            Some(p) => p,
-            None => {
-                log::info!("PID {} no longer exists", pid);
-                self.ui.t_status.set_text(&qs("Status: Exited"));
-                // Don't keep refreshing because of PID reuse (fuck you apple)
-                self.target_process.replace(None);
-                self.ui.attach_button.set_enabled(false);
-                drop(system);
-                return;
-            }
-        };
+        if !system.refresh_process(pid) {
+            log::info!("PID {} no longer exists", pid);
+            self.ui.t_status.set_text(&qs("Status: Exited"));
+            // Don't keep refreshing because of PID reuse (fuck you apple)
+            self.target_process.replace(None);
+            self.ui.attach_button.set_enabled(false);
+            drop(system);
+            return;
+        }
+        let proc = system.process(pid).unwrap();
 
         self.ui
             .t_name
@@ -779,6 +776,7 @@ impl MainWindow {
                 self.ui.kill_button.set_enabled(false);
                 self.ui.lib_list_gbox.set_enabled(false);
                 self.ui.module_list_gbox.set_enabled(false);
+                self.refresh_target_info();
             }
             Err(e) => {
                 let err_str = format!("The target process could not be killed to: {}", e);
@@ -830,7 +828,7 @@ impl MainWindow {
     #[slot(SlotNoArgs)]
     unsafe fn on_attach_clicked(self: &Rc<Self>) {
         if self.target_process.borrow().is_some() {
-            let handle = match self.attach() {
+            let mut handle = match self.attach() {
                 Ok(p) => p,
                 Err(e) => {
                     let err_str = format!("The target process could not be attached to: {}", e);
@@ -844,6 +842,11 @@ impl MainWindow {
                 }
             };
             log::info!("Attached to process {}", handle.get_pid());
+
+            if let Some(child) = self.child_handle.replace(None) {
+                handle.child().replace(child);
+            }
+
             self.target_handle.replace(Some(handle));
             self.ui.attach_button.set_enabled(false);
             self.ui.kill_button.set_enabled(true);
@@ -851,6 +854,14 @@ impl MainWindow {
             self.ui.module_list_gbox.set_enabled(true);
             self.ui.t_has_perms.set_text(&qs("Successfully attached"));
         } else {
+            // ProcHandle::new just launches and calls task_for_pid anyways, so use dnject attach logic
+            if cfg!(target_os = "macos") {
+                self.on_copy_or_launch_clicked();
+                if self.target_process.borrow().is_some() {
+                    self.on_attach_clicked();
+                }
+                return;
+            }
             let mut handle = match self
                 .create_target_cmd()
                 .map_err(InjectorError::from)
@@ -1057,6 +1068,7 @@ impl MainWindow {
 
     #[slot(SlotNoArgs)]
     unsafe fn on_back_clicked(self: &Rc<Self>) {
+        self.child_handle.replace(None);
         self.target_handle.replace(None);
         self.target_process.replace(None);
 
