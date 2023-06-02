@@ -374,7 +374,16 @@ impl ProbeInfo {
                     ))?
                     .deref();
 
-        let exe_file = fs::read(process.exe())?;
+        let path = if process.exe().is_relative() {
+            let mut full = process.cwd().to_path_buf();
+            full.push(process.exe());
+            full.canonicalize()?;
+            full
+        } else {
+            process.exe().to_path_buf()
+        };
+
+        let exe_file = fs::read(path)?;
         let exe = MachFile::parse(&exe_file)?;
         // TODO match correct arch instead of first
         let exe_data = exe.nth_macho(0)?;

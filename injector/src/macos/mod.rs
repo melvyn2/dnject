@@ -452,33 +452,46 @@ impl ProcHandle {
         };
     }
 
-    /// Ejects the given [ModHandle]s if they are owned by this instance
-    pub fn eject(&mut self, handles: &[ModHandle]) -> Result<(), InjectorError> {
-        // Get vec of ModHandles whose raw handles aren't owned by this struct
-        let mut owned_mods = self.modules.clone();
-        let mut non_owned: Vec<&ModHandle> = Vec::new();
-        let mut non_owned_idx: Vec<usize> = Vec::new();
-        // This is necessary to remove one match at a time rather than all matches
-        for (idx, target) in handles.iter().enumerate() {
-            if let Some(p) = owned_mods.iter().position(|c| c.1 == target.1) {
-                owned_mods.remove(p);
-            } else {
-                non_owned_idx.push(idx);
-                non_owned.push(target);
+    /// Ejects the given [ModHandle]s if they are owned by this instance,
+    /// or all injected modules if `handles` is [None]
+    pub fn eject(&mut self, handles: Option<&[ModHandle]>) -> Result<(), InjectorError> {
+        let (left_handles, to_eject) = if let Some(handles) = handles {
+            // Get vec of ModHandles whose raw handles aren't owned by this struct
+            let mut owned_mods = self.modules.clone();
+            let mut non_owned: Vec<&ModHandle> = Vec::new();
+            let mut non_owned_idx: Vec<usize> = Vec::new();
+            // This is necessary to remove one match at a time rather than all matches
+            for (idx, target) in handles.iter().enumerate() {
+                if let Some(p) = owned_mods.iter().position(|c| c.1 == target.1) {
+                    owned_mods.remove(p);
+                } else {
+                    non_owned_idx.push(idx);
+                    non_owned.push(target);
+                }
             }
-        }
 
-        if !non_owned.is_empty() {
-            return Err(InjectorError::new(
-                InjectorErrorKind::ModuleHandlesNotOwned(non_owned_idx),
-                format!("non-owned ModHandle cannot be ejected: {:?}", non_owned),
-            ));
+            if !non_owned.is_empty() {
+                return Err(InjectorError::new(
+                    InjectorErrorKind::ModuleHandlesNotOwned(non_owned_idx),
+                    format!("non-owned ModHandle cannot be ejected: {:?}", non_owned),
+                ));
+            };
+
+            let raw_handles = handles.iter().map(|m| m.1).collect::<Vec<*mut c_void>>();
+            (owned_mods, raw_handles)
+        } else {
+            let raw_handles = self
+                .modules
+                .iter()
+                .cloned()
+                .map(|h| h.1)
+                .collect::<Vec<*mut c_void>>();
+            let leftover = vec![];
+            (leftover, raw_handles)
         };
-
-        let raw_handles = handles.iter().map(|m| m.1).collect::<Vec<*mut c_void>>();
-        match unsafe { self.eject_raw(&raw_handles) } {
+        match unsafe { self.eject_raw(&to_eject) } {
             Ok(()) => {
-                self.modules = owned_mods;
+                self.modules = left_handles;
                 Ok(())
             }
             Err(e) if let InjectorErrorKind::PartialSuccessRaw(ejected_handles) = e.kind().clone() => {

@@ -964,7 +964,10 @@ impl MainWindow {
             .map(|idx| PathBuf::from(self.ui.lib_list.item(idx).text().to_std_string()))
             .collect();
         match handle.inject(&paths) {
-            Ok(()) => self.ui.lib_list.clear(),
+            Ok(()) => {
+                self.ui.lib_list.clear();
+                self.on_lib_changed(-1);
+            }
             Err(e) => {
                 if let InjectorErrorKind::PartialSuccess(idx) = e.kind() {
                     for i in 0..*idx {
@@ -1035,7 +1038,7 @@ impl MainWindow {
 
         let mut prochandle_ref = self.target_handle.borrow_mut();
         let prochandle = prochandle_ref.as_mut().unwrap();
-        match prochandle.eject(&handles) {
+        match prochandle.eject(Some(&handles)) {
             Ok(()) => {}
             Err(e) => {
                 let err_str = format!("Module(s) could not be ejected: {}", e);

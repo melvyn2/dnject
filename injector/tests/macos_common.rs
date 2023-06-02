@@ -156,6 +156,25 @@ pub fn test_inject() {
     };
     assert_eq!(&injected_stdout, testbin::INJECTED_MSG);
 
+    // Eject
+    handle.eject(None).unwrap_or_else(|e| {
+        let _ = child.kill();
+        Err(e).unwrap()
+    });
+
+    // Ensure injected library did its thing (wrote to stdout)
+    let ejected_stdout = {
+        let mut o = vec![0u8; testbin::EJECTED_MSG.len()];
+        child
+            .stdout
+            .as_mut()
+            .unwrap()
+            .read_exact(o.as_mut_slice())
+            .unwrap();
+        o
+    };
+    assert_eq!(&ejected_stdout, testbin::EJECTED_MSG);
+
     // Kill child process (and ignore error if it already exited)
     let _ = child.kill();
 }
