@@ -22,8 +22,8 @@ mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::ProcHandle;
 
-// #[cfg(all(feature = "wine", target_family = "unix"))]
-// pub mod wine;
+#[cfg(all(feature = "wine", target_family = "unix"))]
+pub mod wine;
 
 #[cfg(target_os = "windows")]
 mod nt;
@@ -43,6 +43,8 @@ pub enum InjectorErrorKind {
     PartialSuccess(usize),
     PartialSuccessRaw(Vec<*mut libc::c_void>),
     IoError(std::io::ErrorKind),
+    #[cfg(target_os = "macos")]
+    MachError(mach_util::error::MachErrorKind),
     Unknown,
 }
 

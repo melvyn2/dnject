@@ -23,6 +23,7 @@ use mach2::vm_statistics::VM_FLAGS_ANYWHERE;
 use mach2::vm_types::{mach_vm_address_t, mach_vm_size_t};
 
 use crate::{InjectorError, InjectorErrorKind};
+use mach_util::error::MachError;
 use mach_util::ldsyms::{_mh_execute_header, getsectiondata};
 use mach_util::mach_error::mach_error_string;
 use mach_util::tasks::thread_create_running;
@@ -46,6 +47,15 @@ fn ensure_matching_arch(target: pid_t) -> Result<(), InjectorError> {
         ));
     };
     Ok(())
+}
+
+impl From<MachError> for InjectorError {
+    fn from(value: MachError) -> Self {
+        Self::new(
+            InjectorErrorKind::MachError(value.kind()),
+            value.to_string(),
+        )
+    }
 }
 
 /// A handle to a native process which can be injected into

@@ -3,43 +3,19 @@
 
 //! C-defs which aren't included in mach2, as well as helper classes
 
+mod stubs;
+pub use stubs::*;
+
+pub mod error;
+
+pub mod mach_portal;
+
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::Display;
 use std::hash::Hasher;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-
-// Re-export for macro use
-#[doc(hidden)]
-pub use mach2::kern_return::KERN_SUCCESS;
-
-/// Wrap a mach API that returns `kern_return_t` to return according `Result`s
-#[macro_export]
-macro_rules! mach_try {
-    ($e:expr) => {{
-        let kr = $e;
-        if kr == $crate::KERN_SUCCESS {
-            Ok(())
-        } else {
-            let err_str = ::std::format!(
-                "`{}` failed with return code 0x{:x}: {}",
-                ::std::stringify!($e).split_once('(').unwrap().0,
-                kr,
-                ::std::ffi::CStr::from_ptr($crate::mach_error::mach_error_string(kr))
-                    .to_string_lossy()
-            );
-            // #[cfg(panic = "unwind")]
-            // let err_str = format!("[{}:{}] {}", file!(), line!(), err_str);
-            ::std::result::Result::Err(::std::io::Error::new(::std::io::ErrorKind::Other, err_str))
-        }
-    }};
-}
-
-mod stubs;
-pub use stubs::*;
-
-pub mod mach_portal;
 
 pub fn get_pid_cpu_type(pid: libc::pid_t) -> Result<libc::cpu_type_t, std::io::Error> {
     // See https://github.com/objective-see/ProcessMonitor/blob/1a9c2e0c8044ad10676efad480f200f12060ed7a/Library/Source/Process.m#L252

@@ -3,6 +3,7 @@ name = "dnject"
 version = "0.1.0"
 edition = "2021"
 publish = false
+description = "The DNSense GUI injector, cross platform and wine-enabled"
 
 [workspace]
 members = ["injector", "injector/testlib", "mach_util", "macos_portfetch", "macos_portfetch/macos_portfetch_internal"]
@@ -43,3 +44,9 @@ debug-assertions = false
 # Needed for non-x86_64 darwin targets
 [patch.crates-io]
 ring = { git = "https://github.com/melvyn2/ring.git" }
+
+[package.metadata.bundle]
+identifier = "pub.dnsense.dnject"
+copyright = "© Copyright 2001 $wag$oft Industries DnbH"
+category = "Development"
+osx_minimum_system_version = "10.13"

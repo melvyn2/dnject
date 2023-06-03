@@ -17,6 +17,7 @@ use mach2::task::{task_get_special_port, TASK_BOOTSTRAP_PORT};
 use mach2::traps::mach_task_self;
 
 use crate::bsm::audit_token_to_pid;
+use crate::error::MachError;
 use crate::mach_try;
 use crate::message::{
     mach_msg_recv_t, mach_msg_send_t, MACH_MSGH_BITS_REMOTE, MACH_RCV_TRAILER_AUDIT,
@@ -32,7 +33,7 @@ pub struct MachPortal {
 
 impl MachPortal {
     /// Create a new mach port registered with the given bootstrap name
-    pub fn register(bootstrap_name: &str) -> Result<Self, std::io::Error> {
+    pub fn register(bootstrap_name: &str) -> Result<Self, MachError> {
         let port = unsafe {
             let port: mach_port_t = {
                 let mut r = 0;
@@ -54,7 +55,8 @@ impl MachPortal {
             port
         };
 
-        let name = CString::new(bootstrap_name)?;
+        // TODO unwrap bad here (user could do nul-byte in name)
+        let name = CString::new(bootstrap_name).unwrap();
         unsafe {
             let bootstrap_port: mach_port_t = {
                 let mut r = MaybeUninit::zeroed();
@@ -75,7 +77,7 @@ impl MachPortal {
     }
 
     /// Create a new mach port connected to the bootstrap port at the given name
-    pub fn connect(bootstrap_name: &str) -> Result<Self, std::io::Error> {
+    pub fn connect(bootstrap_name: &str) -> Result<Self, MachError> {
         let bootstrap_port: mach_port_t = unsafe {
             let mut r = 0;
             mach_try!(task_get_special_port(
@@ -86,7 +88,7 @@ impl MachPortal {
             r
         };
 
-        let name = CString::new(bootstrap_name)?;
+        let name = CString::new(bootstrap_name).unwrap();
         let server_port: mach_port_t = unsafe {
             let mut r = 0;
             mach_try!(bootstrap_look_up(
@@ -104,7 +106,7 @@ impl MachPortal {
     }
 
     /// Send a mach port through this port
-    pub fn send_port(&self, port: mach_port_t) -> Result<(), std::io::Error> {
+    pub fn send_port(&self, port: mach_port_t) -> Result<(), MachError> {
         let mut msg = mach_msg_send_t {
             msg_header: mach_msg_header_t {
                 msgh_bits: MACH_MSGH_BITS_REMOTE(MACH_MSG_TYPE_COPY_SEND) | MACH_MSGH_BITS_COMPLEX,
@@ -134,7 +136,7 @@ impl MachPortal {
     }
 
     /// Block on and receive a mach port through this port
-    pub fn receive_port(&self) -> Result<(mach_port_t, pid_t), std::io::Error> {
+    pub fn receive_port(&self) -> Result<(mach_port_t, pid_t), MachError> {
         let msg: mach_msg_recv_t = unsafe {
             let mut r: MaybeUninit<mach_msg_recv_t> = MaybeUninit::zeroed();
             mach_try!(mach_msg(
