@@ -60,7 +60,9 @@ use security_framework_sys::authorization::{
     AuthorizationRef,
 };
 
-use apple_codesign::{CodeSignatureFlags, MachFile, SettingsScope, SigningSettings, UnifiedSigner};
+use apple_codesign::{
+    CodeSignature, CodeSignatureFlags, MachFile, SettingsScope, SigningSettings, UnifiedSigner,
+};
 use sysinfo::{Pid, PidExt, ProcessExt, ProcessRefreshKind, RefreshKind, System, SystemExt};
 
 use mach_util::mach_portal::MachPortal;
@@ -403,10 +405,27 @@ impl ProbeInfo {
             Some(ent) => ent.as_str().contains("get-task-allow"),
         };
 
-        let hardened = cs
-            .code_directory()?
-            .map(|blob| blob.flags & CodeSignatureFlags::RUNTIME == CodeSignatureFlags::RUNTIME)
-            .unwrap_or(false);
+        let hardened = {
+            let flag = cs
+                .code_directory()?
+                .map(|blob| blob.flags & CodeSignatureFlags::RUNTIME == CodeSignatureFlags::RUNTIME)
+                .unwrap_or(false);
+
+            // Apple first-party binaries seem to be treated as hardened even without the Runtime flag
+            // TODO find better indicator
+            let apple_fp = CodeSignature::try_from(cs)
+                .ok()
+                .and_then(|cs| cs.cms)
+                .map(|cms| {
+                    cms.signers.iter().any(|s| {
+                        s.issuer
+                            .contains("Apple Code Signing Certification Authority")
+                    })
+                })
+                .unwrap_or(false);
+
+            flag || apple_fp
+        };
 
         Ok(Self {
             same_euid,
