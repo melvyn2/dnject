@@ -48,6 +48,19 @@ pub mod ldsyms {
     }
 }
 
+pub mod libproc {
+    use libc::{c_int, c_void};
+
+    extern "C" {
+        fn proc_regionfilename(
+            pid: c_int,
+            address: u64,
+            buffer: *mut c_void,
+            buffersize: u32,
+        ) -> c_int;
+    }
+}
+
 pub mod mach_error {
     use libc::c_char;
 

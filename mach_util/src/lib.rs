@@ -7,8 +7,8 @@ mod stubs;
 pub use stubs::*;
 
 pub mod error;
-
 pub mod mach_portal;
+pub mod mapinfo;
 
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::Display;

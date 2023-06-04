@@ -139,16 +139,12 @@ impl Display for MachError {
     }
 }
 
-// Re-export for macro use
-#[doc(hidden)]
-pub use mach2::kern_return::KERN_SUCCESS;
-
 /// Wrap a mach API that returns `kern_return_t` to return according `Result`s
 #[macro_export]
 macro_rules! mach_try {
     ($e:expr) => {{
         let kr = $e;
-        if kr == $crate::error::KERN_SUCCESS {
+        if kr == $crate::error::MachErrorKind::KERN_SUCCESS as i32 {
             Ok(())
         } else {
             let err_str = ::std::format!(
