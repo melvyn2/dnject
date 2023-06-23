@@ -8,4 +8,5 @@ edition = "2021"
 [dependencies]
 libc = "0.2"
 mach2 = "0.4"
+bincode = "2.0.0-rc.3"
 mach_util = { path = "../../mach_util" }

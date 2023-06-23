@@ -22,9 +22,6 @@ mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::ProcHandle;
 
-#[cfg(all(feature = "wine", target_family = "unix"))]
-pub mod wine;
-
 #[cfg(target_os = "windows")]
 mod nt;
 #[cfg(target_os = "windows")]

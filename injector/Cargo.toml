@@ -10,8 +10,7 @@ required-features = ["env_logger"]
 
 [features]
 # Until https://github.com/rust-lang/rfcs/pull/3374, leave env_logger as default dep and let consumers remove if desired
-default = ["wine", "env_logger"]
-wine = []  # No-op on non-unix
+default = ["env_logger"]
 test_broken = [ "spawn-task-port" ]  # Used to test broken methods
 
 [dependencies]
@@ -25,7 +24,6 @@ testlib = { path = "./testlib", artifact = ["cdylib"] }
 testbin = { path = "./testbin", artifact = ["bin"], lib = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-darwin-libproc-sys = "0.2"
 spawn-task-port = { git = "https://github.com/melvyn2/spawn-task-port.git", optional = true }
 mach2 = "0.4"
 ctor = "0.2"

@@ -1,40 +1,77 @@
-use std::io::{stdin, stdout, BufRead, Write};
+use mach2::traps::{mach_task_self, task_for_pid};
 use std::process::exit;
 
-use libc::pid_t;
-
-use mach2::kern_return::KERN_SUCCESS;
-use mach2::traps::{mach_task_self, task_for_pid};
-
 use mach_util::mach_portal::MachPortal;
+use mach_util::mach_try;
 
-use macos_portfetch_internal::STATUS_MESSAGES;
+use macos_portfetch_internal::{Input, StatusMessage};
 
 fn main() {
-    let mut inp_iter = stdin().lock().lines();
-    let pid_s = inp_iter.next().unwrap().unwrap();
-    let bootstrap_name = inp_iter.next().unwrap().unwrap();
-    drop(inp_iter);
-    let pid = pid_s.parse::<pid_t>().unwrap();
-
-    stdout().write_all(STATUS_MESSAGES[0]).unwrap();
-
-    let p = MachPortal::connect(&bootstrap_name).unwrap();
-
-    stdout().write_all(STATUS_MESSAGES[1]).unwrap();
-
-    let mut port = 0;
-    unsafe {
-        match task_for_pid(mach_task_self(), pid, &mut port) {
-            KERN_SUCCESS => stdout().write_all(STATUS_MESSAGES[2]).unwrap(),
-            other => {
-                print!("0x{:08x}", other);
-                exit(1)
-            }
+    let mut stdin = std::io::stdin();
+    let mut stdout = std::io::stdout();
+    let input: Input = match bincode::decode_from_std_read(&mut stdin, bincode::config::standard())
+    {
+        Ok(i) => {
+            bincode::encode_into_std_write(
+                StatusMessage::Parse(Ok(())),
+                &mut stdout,
+                bincode::config::standard(),
+            )
+            .unwrap();
+            i
+        }
+        Err(e) => {
+            bincode::encode_into_std_write(
+                StatusMessage::Parse(Err(e.to_string())),
+                &mut stdout,
+                bincode::config::standard(),
+            )
+            .unwrap();
+            exit(1);
         }
     };
 
-    p.send_port(port).unwrap();
+    let portal = match MachPortal::connect(&input.bootstrap_name) {
+        Ok(p) => {
+            bincode::encode_into_std_write(
+                StatusMessage::Connect(Ok(())),
+                &mut stdout,
+                bincode::config::standard(),
+            )
+            .unwrap();
+            p
+        }
+        Err(e) => {
+            bincode::encode_into_std_write(
+                StatusMessage::Connect(Err(e)),
+                &mut stdout,
+                bincode::config::standard(),
+            )
+            .unwrap();
+            exit(2);
+        }
+    };
 
-    stdout().write_all(STATUS_MESSAGES[3]).unwrap();
+    let mut port = 0;
+    let r = unsafe { mach_try!(task_for_pid(mach_task_self(), input.target, &mut port)) };
+    bincode::encode_into_std_write(
+        StatusMessage::TFP(r.clone()),
+        &mut stdout,
+        bincode::config::standard(),
+    )
+    .unwrap();
+    if r.is_err() {
+        exit(3);
+    }
+
+    let r = portal.send_port(port);
+    bincode::encode_into_std_write(
+        StatusMessage::Send(r.clone()),
+        &mut stdout,
+        bincode::config::standard(),
+    )
+    .unwrap();
+    if r.is_err() {
+        exit(4);
+    }
 }

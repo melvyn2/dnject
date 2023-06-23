@@ -6,6 +6,7 @@ use std::ptr::addr_of_mut;
 use libc::pid_t;
 
 use mach2::bootstrap::bootstrap_look_up;
+use mach2::kern_return::KERN_SUCCESS;
 use mach2::mach_port::{mach_port_allocate, mach_port_deallocate, mach_port_insert_right};
 use mach2::message::{
     mach_msg, mach_msg_body_t, mach_msg_header_t, mach_msg_port_descriptor_t,
@@ -29,6 +30,7 @@ use crate::private::bootstrap_register2;
 pub struct MachPortal {
     server_port: mach_port_t,
     bootstrap_name: String,
+    should_unregister: bool,
 }
 
 impl MachPortal {
@@ -73,6 +75,7 @@ impl MachPortal {
         Ok(Self {
             server_port: port,
             bootstrap_name: bootstrap_name.to_string(),
+            should_unregister: true,
         })
     }
 
@@ -102,6 +105,7 @@ impl MachPortal {
         Ok(Self {
             server_port,
             bootstrap_name: bootstrap_name.to_string(),
+            should_unregister: false,
         })
     }
 
@@ -165,9 +169,24 @@ impl MachPortal {
 
 impl Drop for MachPortal {
     fn drop(&mut self) {
-        // Nothing to do if we fail, ignore return value
         unsafe {
+            // Nothing to do if we fail, ignore return value
             mach_port_deallocate(mach_task_self(), self.server_port);
+
+            // If server, unregister bootstrap port
+            if self.should_unregister {
+                let mut bootstrap_port = MaybeUninit::zeroed();
+                if task_get_special_port(
+                    mach_task_self(),
+                    TASK_BOOTSTRAP_PORT,
+                    bootstrap_port.as_mut_ptr(),
+                ) == KERN_SUCCESS
+                {
+                    let bootstrap_port = bootstrap_port.assume_init();
+                    let name = CString::new(mem::take(&mut self.bootstrap_name)).unwrap();
+                    bootstrap_register2(bootstrap_port, name.as_ptr(), MACH_PORT_NULL, 0);
+                }
+            }
         }
     }
 }

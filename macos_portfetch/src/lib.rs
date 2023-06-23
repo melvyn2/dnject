@@ -46,8 +46,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::ptr::{null, null_mut};
-use std::str::from_utf8;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use libc::{c_char, fileno, geteuid, pid_t};
 
@@ -63,13 +62,14 @@ use security_framework_sys::authorization::{
 use apple_codesign::{
     CodeSignature, CodeSignatureFlags, MachFile, SettingsScope, SigningSettings, UnifiedSigner,
 };
+use mach_util::error::MachErrorKind;
 use sysinfo::{Pid, PidExt, ProcessExt, ProcessRefreshKind, RefreshKind, System, SystemExt};
 
 use mach_util::mach_portal::MachPortal;
 use mach_util::traps::pid_for_task;
 use mach_util::TempFile;
 
-use macos_portfetch_internal::STATUS_MESSAGES;
+use macos_portfetch_internal::{Input, StatusMessage};
 
 const PORTFETCH_BIN: &[u8] = include_bytes!(env!("CARGO_BIN_FILE_MACOS_PORTFETCH_INTERNAL"));
 
@@ -99,14 +99,15 @@ const ENT_XML_PORTFETCH_EXPL: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 /// Gets a task port for a process using the `com.apple.security.cs.debugger` entitlement.
 /// Target process needs to be signed with `get-task-allow`.
 pub fn get_port_signed(target: pid_t) -> Result<mach_port_t, std::io::Error> {
+    check_pid_exists(target)?;
+
     let bin = create_bin(PORTFETCH_BIN, Some(ENT_XML_PORTFETCH), true)?;
 
-    // For some reason clippy thinks that the borrow is unnecessary... it isn't
-    #[allow(clippy::needless_borrow)]
     let mut child = Command::new(bin.as_os_str())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()?;
+    log::trace!("spawned child signed portfetch binary");
 
     let r = process_child(
         target,
@@ -117,6 +118,7 @@ pub fn get_port_signed(target: pid_t) -> Result<mach_port_t, std::io::Error> {
 
     // Ensure process is really dead
     let _ = child.kill();
+    child.wait()?;
 
     r
 }
@@ -124,6 +126,8 @@ pub fn get_port_signed(target: pid_t) -> Result<mach_port_t, std::io::Error> {
 /// Gets a task port for a process using the `com.apple.security.cs.debugger` entitlement and native
 /// privilege elevation through Authorization Services
 pub fn get_port_signed_admin(target: pid_t) -> Result<mach_port_t, std::io::Error> {
+    check_pid_exists(target)?;
+
     let bin = create_bin(PORTFETCH_BIN, Some(ENT_XML_PORTFETCH), true)?;
 
     let (stdin, stdout) = priv_run(&bin, &[])?;
@@ -135,6 +139,8 @@ pub fn get_port_signed_admin(target: pid_t) -> Result<mach_port_t, std::io::Erro
 /// and root uid, requesting elevation through Authorization Services
 #[cfg(feature = "exploit-CVE-2022-42855")]
 pub fn get_port_admin_exploit(target: pid_t) -> Result<mach_port_t, std::io::Error> {
+    check_pid_exists(target)?;
+
     let bin = create_bin(PORTFETCH_BIN, Some(ENT_XML_PORTFETCH_EXPL), true)?;
 
     let (stdin, stdout) = priv_run(&bin, &[])?;
@@ -142,12 +148,25 @@ pub fn get_port_admin_exploit(target: pid_t) -> Result<mach_port_t, std::io::Err
     process_child(target, None, stdin, stdout)
 }
 
+/// Returns an error if the target doesn't exist
+fn check_pid_exists(target: pid_t) -> Result<(), std::io::Error> {
+    if unsafe { libc::kill(target, 0) } != 0 {
+        if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+            return Err(std::io::Error::new(
+                ErrorKind::NotFound,
+                "target process does not exist",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Given a running portfetch process's stdin and stdout, attemps to get a mach port for the target
 fn process_child<I: Write, O: Read + AsRawFd>(
     target: pid_t,
     portfetch_id: Option<pid_t>,
     mut stdin: I,
-    mut stdout: O,
+    stdout: O,
 ) -> Result<mach_port_t, std::io::Error> {
     let bootstrap_name = {
         let mut h = DefaultHasher::new();
@@ -162,67 +181,66 @@ fn process_child<I: Write, O: Read + AsRawFd>(
         format!("{:x}", h.finish())
     };
     let portal = MachPortal::register(&bootstrap_name)?;
+    log::trace!("registered mach bootstrap portal");
 
-    let mut input = vec![];
-    input.extend_from_slice(target.to_string().as_bytes());
-    input.push(b'\n');
-    input.extend_from_slice(bootstrap_name.as_bytes());
-    input.push(b'\n');
-    stdin.write_all(&input)?;
+    let input = Input {
+        target,
+        bootstrap_name,
+    };
+    bincode::encode_into_std_write(input, &mut stdin, bincode::config::standard()).unwrap();
+    // Flush stdin by newline
+    stdin.write(b"\n")?;
     drop(stdin);
 
-    macro_rules! check_state {
-        ($stdout:ident, $stage:literal, $stage_name:literal) => {{
-            let mut buf = [0u8; STATUS_MESSAGES[$stage].len()];
-            match $stdout.read_exact(&mut buf) {
-                Ok(()) => {}
+    let mut t_stdout = timeout_readwrite::TimeoutReader::new(stdout, Duration::from_millis(50));
+    for stage in [
+        StatusMessage::Parse(Ok(())),
+        StatusMessage::Connect(Ok(())),
+        StatusMessage::TFP(Ok(())),
+    ] {
+        let result: StatusMessage =
+            match bincode::decode_from_std_read(&mut t_stdout, bincode::config::standard()) {
+                Ok(r) => r,
                 Err(e) => {
                     return Err(std::io::Error::new(
-                        e.kind(),
+                        ErrorKind::BrokenPipe,
                         format!(
                             "portfetch child pipe failed at stage {}: {}",
-                            $stage_name, e
+                            stage.to_string(),
+                            e
                         ),
                     ))
                 }
-            }
-            if &buf != STATUS_MESSAGES[$stage] {
-                let mut buf_full = buf.to_vec();
-                if let Ok(mut r) = nonblock::NonBlockingReader::from_fd($stdout) {
-                    let _ = r.read_available(&mut buf_full);
-                }
+            };
 
-                if &buf_full[..2] == b"0x" {
-                    if let Ok(err_str) = from_utf8(&buf_full[2..]) {
-                        if let Ok(err_code) = i32::from_str_radix(err_str, 16) {
-                            let mach_err = unsafe {
-                                std::ffi::CStr::from_ptr(mach_util::mach_error::mach_error_string(
-                                    err_code,
-                                ))
-                                .to_string_lossy()
-                            };
-                            let err =
-                                format!("portfetch child failed to {}: {}", $stage_name, mach_err);
-                            return Err(std::io::Error::new(ErrorKind::Other, err));
-                        }
-                    }
-                }
-
-                let err = String::from_utf8_lossy(&buf_full).to_string();
+        match result {
+            StatusMessage::TFP(Err(ref e)) if e.kind() == MachErrorKind::KERN_FAILURE => {
                 return Err(std::io::Error::new(
-                    ErrorKind::BrokenPipe,
-                    format!("portfetch child failed to {}: {}", $stage_name, err),
-                ));
+                    ErrorKind::PermissionDenied,
+                    "failed to attach to target mach port",
+                ))
             }
-        }};
+            StatusMessage::Parse(Err(_)) => {}
+            StatusMessage::Connect(Err(_))
+            | StatusMessage::TFP(Err(_))
+            | StatusMessage::Send(Err(_)) => {
+                return Err(std::io::Error::new(
+                    ErrorKind::Other,
+                    format!("portfetch child error: {}", result.to_string(),),
+                ))
+            }
+            _ => {
+                log::trace!("portfetch child {}", result.to_string());
+            }
+        }
     }
 
-    check_state!(stdout, 0, "init");
-    check_state!(stdout, 1, "connect");
-    check_state!(stdout, 2, "get target port");
-
     let (port, origin_pid) = portal.receive_port()?;
+    log::debug!("received target mach port");
 
+    // Child Send status message could be read here but there's not much reason to
+
+    // Ensure that origin was intended child process
     if let Some(check_pid) = portfetch_id {
         if check_pid != origin_pid {
             return Err(std::io::Error::new(
@@ -235,8 +253,7 @@ fn process_child<I: Write, O: Read + AsRawFd>(
         }
     }
 
-    check_state!(stdout, 3, "send port");
-
+    // Ensure task port is valid and for intended target
     let mut pid: pid_t = 0;
     match unsafe { pid_for_task(port, &mut pid) } {
         KERN_SUCCESS => (),
@@ -260,6 +277,7 @@ fn process_child<I: Write, O: Read + AsRawFd>(
             format!("received task port for unexpected pid {}", pid),
         ));
     }
+    log::trace!("validated target mach port");
 
     Ok(port)
 }
@@ -285,6 +303,8 @@ fn priv_run(exe: &Path, args: &[&str]) -> Result<(File, File), std::io::Error> {
         r.push(null_mut());
         r
     };
+    log::trace!("prepared path and arguments for elevated permission execution");
+
     let pipe_fd = unsafe {
         // Create auth right
         let mut auth: AuthorizationRef = null_mut();
@@ -315,9 +335,15 @@ fn priv_run(exe: &Path, args: &[&str]) -> Result<(File, File), std::io::Error> {
         OwnedFd::from_raw_fd(fileno(pipe))
     };
     let pipe_fd2 = pipe_fd.try_clone()?;
+    log::debug!(
+        "launched {} with elevated permissions",
+        exe.to_string_lossy()
+    );
+
     Ok((File::from(pipe_fd), File::from(pipe_fd2)))
 }
 
+/// Sign a mach-o byte arry and place it on disk at the returned temporary path, deleting it on drop
 fn create_bin(bin: &[u8], ent: Option<&str>, hardened: bool) -> Result<TempFile, std::io::Error> {
     let out_bin = TempFile::random("portfetch", None);
 
@@ -337,6 +363,7 @@ fn create_bin(bin: &[u8], ent: Option<&str>, hardened: bool) -> Result<TempFile,
             .map_err(|e| std::io::Error::new(ErrorKind::Other, e.to_string()))?;
     }
 
+    log::trace!("wrote signed child portfetch binary");
     Ok(out_bin)
 }
 

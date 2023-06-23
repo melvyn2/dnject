@@ -5,7 +5,7 @@ use mach2::kern_return::kern_return_t;
 use mach2::message;
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[repr(i32)]
 pub enum MachErrorKind {
     KERN_SUCCESS = kern_return::KERN_SUCCESS,
@@ -98,10 +98,47 @@ pub enum MachErrorKind {
     MACH_RCV_IN_PROGRESS_TIMED = message::MACH_RCV_IN_PROGRESS_TIMED,
 }
 
+#[cfg(feature = "bincode")]
+impl bincode::Encode for MachErrorKind {
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode::error::EncodeError> {
+        let val = (*self).into();
+        <i32 as bincode::Encode>::encode(&val, encoder)?;
+        Ok(())
+    }
+}
+
+#[cfg(feature = "bincode")]
+impl bincode::Decode for MachErrorKind {
+    fn decode<D: bincode::de::Decoder>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        <i32 as bincode::Decode>::decode(decoder).map(Self::from)
+    }
+}
+
+#[cfg(feature = "bincode")]
+impl<'de> bincode::BorrowDecode<'de> for MachErrorKind {
+    fn borrow_decode<D: bincode::de::BorrowDecoder<'de>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        <i32 as bincode::Decode>::decode(decoder).map(Self::from)
+    }
+}
+
 impl From<kern_return_t> for MachErrorKind {
     fn from(value: kern_return_t) -> Self {
         // TODO massive troll here
         unsafe { std::mem::transmute(value) }
+    }
+}
+
+impl Into<kern_return_t> for MachErrorKind {
+    fn into(self) -> kern_return_t {
+        // SAFETY: inner representation is guaranteed to be i32 and variants are all valid error constants
+        unsafe { std::mem::transmute(self) }
     }
 }
 
@@ -111,7 +148,8 @@ impl Display for MachErrorKind {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 pub struct MachError {
     kind: MachErrorKind,
     msg: String,
@@ -138,6 +176,8 @@ impl Display for MachError {
         write!(f, "{}", self.msg)
     }
 }
+
+impl std::error::Error for MachError {}
 
 /// Wrap a mach API that returns `kern_return_t` to return according `Result`s
 #[macro_export]
