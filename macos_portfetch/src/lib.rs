@@ -107,7 +107,7 @@ pub fn get_port_signed(target: pid_t) -> Result<mach_port_t, std::io::Error> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()?;
-    log::trace!("spawned child signed portfetch binary");
+    log::trace!("spawned signed child portfetch binary");
 
     let r = process_child(
         target,
@@ -118,7 +118,7 @@ pub fn get_port_signed(target: pid_t) -> Result<mach_port_t, std::io::Error> {
 
     // Ensure process is really dead
     let _ = child.kill();
-    child.wait()?;
+    child.try_wait()?;
 
     r
 }
@@ -131,6 +131,7 @@ pub fn get_port_signed_admin(target: pid_t) -> Result<mach_port_t, std::io::Erro
     let bin = create_bin(PORTFETCH_BIN, Some(ENT_XML_PORTFETCH), true)?;
 
     let (stdin, stdout) = priv_run(&bin, &[])?;
+    log::trace!("spawned signed child portfetch binary as root");
 
     process_child(target, None, stdin, stdout)
 }
@@ -220,8 +221,8 @@ fn process_child<I: Write, O: Read + AsRawFd>(
                     "failed to attach to target mach port",
                 ))
             }
-            StatusMessage::Parse(Err(_)) => {}
-            StatusMessage::Connect(Err(_))
+            StatusMessage::Parse(Err(_))
+            | StatusMessage::Connect(Err(_))
             | StatusMessage::TFP(Err(_))
             | StatusMessage::Send(Err(_)) => {
                 return Err(std::io::Error::new(

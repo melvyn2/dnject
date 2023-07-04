@@ -10,6 +10,7 @@ exploit-CVE-2022-42855 = []
 [dependencies]
 log = "0.4"
 libc = "0.2"
+nix = "0.26"
 timeout-readwrite = "0.3"
 bincode = "2.0.0-rc.3"
 mach2 = "0.4"
