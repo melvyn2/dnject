@@ -1,133 +1,80 @@
-use std::ffi::{c_void, CStr, OsString};
+// from lsof
+
 use std::io::ErrorKind;
 use std::mem::{size_of, MaybeUninit};
-use std::os::unix::ffi::OsStringExt;
-use std::path::PathBuf;
-use std::ptr::addr_of_mut;
 
-use libc::{c_int, pid_t, proc_pidinfo, proc_regionfilename, PROC_PIDPATHINFO_MAXSIZE};
+use libc::{c_int, c_void, pid_t, proc_pidinfo, vnode_info_path};
 
-use mach2::mach_types::vm_task_entry_t;
-use mach2::message::mach_msg_type_number_t;
-use mach2::port::mach_port_name_t;
-use mach2::vm::mach_vm_region;
-use mach2::vm_region::{vm_region_basic_info_data_64_t, vm_region_info_t, VM_REGION_BASIC_INFO_64};
-use mach2::vm_types::{mach_vm_address_t, mach_vm_size_t};
+const PROC_PIDREGIONPATHINFO: c_int = 8;
+const PROC_PIDREGIONPATHINFO_SIZE: c_int = size_of::<proc_regionwithpathinfo>() as c_int;
 
-use crate::error::MachError;
-use crate::mach_try;
-use crate::traps::pid_for_task;
-
-#[derive(Debug, Clone)]
-pub struct Region {
-    size: mach_vm_size_t,
-    info: vm_region_basic_info_data_64_t,
-    address: mach_vm_address_t,
-    filename: Option<PathBuf>,
-}
-
-impl Region {
-    pub fn end(&self) -> mach_vm_address_t {
-        self.address + self.size as mach_vm_address_t
-    }
-
-    pub fn is_read(&self) -> bool {
-        self.info.protection & mach2::vm_prot::VM_PROT_READ != 0
-    }
-    pub fn is_write(&self) -> bool {
-        self.info.protection & mach2::vm_prot::VM_PROT_WRITE != 0
-    }
-    pub fn is_exec(&self) -> bool {
-        self.info.protection & mach2::vm_prot::VM_PROT_EXECUTE != 0
-    }
-
-    pub fn filename(&self) -> Option<&PathBuf> {
-        self.filename.as_ref()
-    }
-}
-
-pub fn task_mem_regions(task: mach_port_name_t) -> Result<Vec<Region>, MachError> {
-    let pid = unsafe {
-        let mut pid = 0;
-        mach_try!(pid_for_task(task, addr_of_mut!(pid)))?;
-        pid
-    };
-
-    dbg!(pid);
-
-    let mut vec = vec![];
-    let mut prev_reg = region_for_addr(task, Some(pid), 1).unwrap();
-    vec.push(prev_reg.clone());
+pub fn mem_regions_for_pid(pid: pid_t) -> Result<Vec<proc_regionwithpathinfo>, std::io::Error> {
+    let mut r = vec![];
+    let mut addr: u64 = 0;
     loop {
-        match region_for_addr(task, Some(pid), prev_reg.end() + 1) {
-            Ok(new_reg) => {
-                vec.push(new_reg.clone());
-                prev_reg = new_reg;
+        let mut reg: MaybeUninit<proc_regionwithpathinfo> = MaybeUninit::zeroed();
+        let written = unsafe {
+            proc_pidinfo(
+                pid,
+                PROC_PIDREGIONPATHINFO,
+                addr,
+                reg.as_mut_ptr() as *mut c_void,
+                PROC_PIDREGIONPATHINFO_SIZE,
+            )
+        };
+        if written <= 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::ESRCH) || err.raw_os_error() == Some(libc::EINVAL) {
+                break;
             }
-            _ => return Ok(vec),
+            return Err(err);
         }
+        if written < PROC_PIDREGIONPATHINFO_SIZE {
+            return Err(std::io::Error::new(
+                ErrorKind::UnexpectedEof,
+                format!(
+                    "only recieved {}/{} bytes of struct",
+                    written, PROC_PIDREGIONPATHINFO_SIZE
+                ),
+            ));
+        }
+        let reg = unsafe { reg.assume_init() };
+        addr = reg.prp_prinfo.pri_address + reg.prp_prinfo.pri_size;
+        r.push(reg);
     }
+    Ok(r)
 }
 
-pub fn region_for_addr(
-    target_task: mach_port_name_t,
-    pid: Option<pid_t>,
-    mut address: mach_vm_address_t,
-) -> Result<Region, MachError> {
-    // TODO says 64 but might work on i686 procs
-    let (info, size): (vm_region_basic_info_data_64_t, mach_vm_size_t) = unsafe {
-        let mut r_info = MaybeUninit::zeroed();
-        let mut r_size: mach_vm_size_t = u64::MAX;
-        let mut count = size_of::<vm_region_basic_info_data_64_t>() as mach_msg_type_number_t;
-        let mut object_name = 0; // Unused
-
-        mach_try!(mach_vm_region(
-            target_task as vm_task_entry_t,
-            &mut address,
-            &mut r_size,
-            VM_REGION_BASIC_INFO_64,
-            r_info.as_mut_ptr() as vm_region_info_t,
-            &mut count,
-            &mut object_name,
-        ))?;
-        assert_ne!(r_size, 0);
-        (r_info.assume_init(), r_size)
-    };
-
-    let filename = pid.and_then(|p| region_filename(p, address).ok());
-
-    Ok(Region {
-        size,
-        info,
-        address,
-        filename,
-    })
+#[allow(non_camel_case_types)]
+#[repr(C)]
+pub struct proc_regionwithpathinfo {
+    pub prp_prinfo: proc_regioninfo,
+    pub prp_vip: vnode_info_path,
 }
 
-pub fn region_filename(pid: i32, address: u64) -> Result<PathBuf, std::io::Error> {
-    let mut buf: Vec<u8> = Vec::with_capacity(PROC_PIDPATHINFO_MAXSIZE as usize);
-
-    let ret = unsafe {
-        proc_regionfilename(
-            pid,
-            address,
-            buf.as_mut_ptr() as *mut c_void,
-            buf.capacity() as u32,
-        )
-    };
-
-    if ret > 0 {
-        unsafe {
-            buf.set_len(ret as usize);
-        }
-        Ok(PathBuf::from(OsString::from_vec(buf)))
-    } else {
-        return Err(std::io::Error::new(
-            std::io::Error::last_os_error().kind(),
-            format!(
-                "failed to find region name for addr 0x{:x} for pid {}",
-                address, pid
-            ),
-        ));
-    }
+#[allow(non_camel_case_types)]
+#[repr(C)]
+#[derive(Debug)]
+pub struct proc_regioninfo {
+    pub pri_protection: u32,
+    pub pri_max_protection: u32,
+    pub pri_inheritance: u32,
+    pub pri_flags: u32,
+    pub pri_offset: u64,
+    pub pri_behavior: u32,
+    pub pri_user_wired_count: u32,
+    pub pri_user_tag: u32,
+    pub pri_pages_resident: u32,
+    pub pri_pages_shared_now_private: u32,
+    pub pri_pages_swapped_out: u32,
+    pub pri_pages_dirtied: u32,
+    pub pri_ref_count: u32,
+    pub pri_shadow_depth: u32,
+    pub pri_share_mode: u32,
+    pub pri_private_pages_resident: u32,
+    pub pri_shared_pages_resident: u32,
+    pub pri_obj_id: u32,
+    pub pri_depth: u32,
+    pub pri_address: u64,
+    pub pri_size: u64,
 }

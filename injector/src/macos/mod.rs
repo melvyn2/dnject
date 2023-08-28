@@ -22,7 +22,6 @@ use mach2::vm_prot::{VM_PROT_EXECUTE, VM_PROT_READ, VM_PROT_WRITE};
 use mach2::vm_statistics::VM_FLAGS_ANYWHERE;
 use mach2::vm_types::{mach_vm_address_t, mach_vm_size_t};
 
-use crate::{InjectorError, InjectorErrorKind};
 use mach_util::error::MachError;
 use mach_util::ldsyms::{_mh_execute_header, getsectiondata};
 use mach_util::mach_error::mach_error_string;
@@ -30,6 +29,8 @@ use mach_util::tasks::thread_create_running;
 use mach_util::thread_act::thread_terminate;
 use mach_util::traps::pid_for_task;
 use mach_util::{get_pid_cpu_type, mach_try};
+
+use crate::{InjectorError, InjectorErrorKind};
 
 mod bootstrap;
 
@@ -589,6 +590,7 @@ impl ProcHandle {
                     &mut seg_size,
                 )
             };
+
             assert!(
                 !seg_ptr.is_null(),
                 "could not locate injection bootstrap segment"
@@ -780,92 +782,13 @@ impl ProcHandle {
         };
         log::trace!("Wrote data struct and c-strings");
 
-        // Setup remote thread execution state
-        #[cfg(target_arch = "x86_64")]
-        let (bootstrap_thread_flavor, mut bootstrap_thread_state, bootstrap_thread_size) = {
-            use mach2::structs::x86_thread_state64_t;
-            use mach2::thread_status::x86_THREAD_STATE64;
-
-            let thread_state: x86_thread_state64_t = x86_thread_state64_t {
-                // Start in bootstrap_entry
-                __rip: remote_code_ptr + seg_ip_offset as mach_vm_address_t,
-                // Stack grows down, start upwards and align to 16
-                __rsp: (remote_stack_ptr + remote_stack_size as mach_vm_address_t) & !16,
-                __rbp: (remote_stack_ptr + remote_stack_size as mach_vm_address_t) & !16,
-                // First (and only) arg passed in this register
-                __rdi: remote_data_ptr,
-                ..Default::default()
-            };
-            (
-                x86_THREAD_STATE64,
-                thread_state,
-                x86_thread_state64_t::count(),
-            )
-        };
-        #[cfg(target_arch = "x86")]
-        let (bootstrap_thread_flavor, mut bootstrap_thread_state, bootstrap_thread_size) = {
-            use mach2::thread_status::x86_THREAD_STATE32;
-            use mach_stubs::structs::x86_thread_state32_t;
-
-            let thread_state: x86_thread_state32_t = x86_thread_state32_t {
-                // Start in bootstrap_entry
-                __eip: (remote_code_ptr + seg_ip_offset as mach_vm_address_t) as u32,
-                // Stack grows down, start upwards and align to 16
-                __esp: ((remote_stack_ptr + remote_stack_size as mach_vm_address_t) & !16) as u32,
-                __ebp: ((remote_stack_ptr + remote_stack_size as mach_vm_address_t) & !16) as u32,
-                // First (and only) arg passed in this register
-                __ecx: remote_data_ptr as u32,
-                ..Default::default()
-            };
-            (
-                x86_THREAD_STATE32,
-                thread_state,
-                x86_thread_state32_t::count(),
-            )
-        };
-        // TODO test following + add arm64e (w/ pointer-auth) support
-        #[cfg(target_arch = "aarch64")]
-        let (bootstrap_thread_flavor, mut bootstrap_thread_state, bootstrap_thread_size) = {
-            use mach_stubs::structs::arm_thread_state64_t;
-            use mach_stubs::structs::__DARWIN_ARM_THREAD_STATE64_FLAGS_NO_PTRAUTH;
-            use mach_stubs::thread_status::ARM_THREAD_STATE64;
-
-            let mut thread_state: arm_thread_state64_t = arm_thread_state64_t {
-                // Start in bootstrap_entry
-                __pc: remote_code_ptr + seg_ip_offset as mach_vm_address_t,
-                // Stack grows down, start upwards and align to 16
-                __sp: (remote_stack_ptr + remote_stack_size as mach_vm_address_t) & !16,
-                __flags: __DARWIN_ARM_THREAD_STATE64_FLAGS_NO_PTRAUTH,
-                ..Default::default()
-            };
-            // First (and only) arg passed in this register
-            thread_state.__x[0] = remote_data_ptr;
-            (
-                ARM_THREAD_STATE64,
-                thread_state,
-                arm_thread_state64_t::count(),
-            )
-        };
-        #[cfg(not(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64")))]
-        compile_error!("missing bootstrap thread state for target arch");
-
-        // Launch the remote thread
         let remote_thread = unsafe {
-            let mut r: mach_port_t = 0;
-            mach_try!(thread_create_running(
-                self.task_port,
-                bootstrap_thread_flavor,
-                addr_of_mut!(bootstrap_thread_state) as thread_state_t,
-                bootstrap_thread_size,
-                &mut r
-            ))?;
-            r
-        };
-
-        log::trace!(
-            "Spawned remote thread with thread port name {}",
-            remote_thread,
-        );
+            self.launch_remote_thread(
+                remote_code_ptr + seg_ip_offset as mach_vm_address_t,
+                remote_stack_ptr + remote_stack_size as mach_vm_address_t,
+                remote_data_ptr,
+            )
+        }?;
 
         let mut timeout = 0;
         let mut status = 0;
@@ -1124,6 +1047,104 @@ impl ProcHandle {
         log::trace!("All remote allocations deallocated");
 
         ret
+    }
+
+    /// # SAFETY
+    /// IP must point to valid code in the target address space,
+    /// stack pointer must be 16-byte aligned and point to valid writable pages in the target address space
+    unsafe fn launch_remote_thread(
+        &self,
+        ip: mach_vm_address_t,
+        stack_ptr: mach_vm_address_t,
+        arg0: mach_vm_address_t,
+    ) -> Result<mach_port_t, MachError> {
+        // Setup remote thread execution stat
+        #[cfg(target_arch = "x86_64")]
+        let (bootstrap_thread_flavor, mut bootstrap_thread_state, bootstrap_thread_size) = {
+            use mach2::structs::x86_thread_state64_t;
+            use mach2::thread_status::x86_THREAD_STATE64;
+
+            let thread_state: x86_thread_state64_t = x86_thread_state64_t {
+                // Start in bootstrap_entry
+                __rip: ip,
+                // Stack grows down, start upwards and align to 16
+                __rsp: stack_ptr,
+                __rbp: stack_ptr,
+                // First (and only) arg passed in this register
+                __rdi: arg0,
+                ..Default::default()
+            };
+            (
+                x86_THREAD_STATE64,
+                thread_state,
+                x86_thread_state64_t::count(),
+            )
+        };
+        #[cfg(target_arch = "x86")]
+        let (bootstrap_thread_flavor, mut bootstrap_thread_state, bootstrap_thread_size) = {
+            use mach2::thread_status::x86_THREAD_STATE32;
+            use mach_util::structs::x86_thread_state32_t;
+
+            let thread_state: x86_thread_state32_t = x86_thread_state32_t {
+                // Start in bootstrap_entry
+                __eip: ip as u32,
+                // Stack grows down, start upwards and align to 16
+                __esp: stack_ptr as u32,
+                __ebp: stack_ptr as u32,
+                // First (and only) arg passed in this register
+                __ecx: arg0 as u32,
+                ..Default::default()
+            };
+            (
+                x86_THREAD_STATE32,
+                thread_state,
+                x86_thread_state32_t::count(),
+            )
+        };
+        // TODO test following + add arm64e (w/ pointer-auth) support
+        #[cfg(target_arch = "aarch64")]
+        let (bootstrap_thread_flavor, mut bootstrap_thread_state, bootstrap_thread_size) = {
+            use mach_util::structs::arm_thread_state64_t;
+            use mach_util::structs::__DARWIN_ARM_THREAD_STATE64_FLAGS_NO_PTRAUTH;
+            use mach_util::thread_status::ARM_THREAD_STATE64;
+
+            let mut thread_state: arm_thread_state64_t = arm_thread_state64_t {
+                // Start in bootstrap_entry
+                __pc: remote_code_ptr + seg_ip_offset as mach_vm_address_t,
+                // Stack grows down, start upwards and align to 16
+                __sp: (remote_stack_ptr + remote_stack_size as mach_vm_address_t) & !16,
+                __flags: __DARWIN_ARM_THREAD_STATE64_FLAGS_NO_PTRAUTH,
+                ..Default::default()
+            };
+            // First (and only) arg passed in this register
+            thread_state.__x[0] = remote_data_ptr;
+            (
+                ARM_THREAD_STATE64,
+                thread_state,
+                arm_thread_state64_t::count(),
+            )
+        };
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64")))]
+        compile_error!("missing bootstrap thread state for target arch");
+
+        // Launch the remote thread
+        let remote_thread = unsafe {
+            let mut r: mach_port_t = 0;
+            mach_try!(thread_create_running(
+                self.task_port,
+                bootstrap_thread_flavor,
+                addr_of_mut!(bootstrap_thread_state) as thread_state_t,
+                bootstrap_thread_size,
+                &mut r
+            ))?;
+            r
+        };
+
+        log::trace!(
+            "Spawned remote thread with thread port name {}",
+            remote_thread,
+        );
+        Ok(remote_thread)
     }
 
     /// Returns a reference counted copy of the underlying task port. The port refcount is incremented,

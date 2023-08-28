@@ -3,6 +3,6 @@
 mod macos_common;
 
 #[test]
-fn test_inject() {
+fn test_inject_unsigned() {
     macos_common::test_inject()
 }

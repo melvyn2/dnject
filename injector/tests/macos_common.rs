@@ -36,9 +36,7 @@ const ENT_XML_TARGET_HARDENED: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0">
 <dict>
     <key>com.apple.security.get-task-allow</key>
-    <true/>
-    <key>com.apple.security.cs.disable-library-validation</key>
-    <true/>
+<true/>
 </dict>
 </plist>"#;
 
@@ -63,8 +61,6 @@ pub fn test_inject_hardened() {
     // Write lib
     let lib = create_bin(TESTLIB, None, false).unwrap();
 
-    // For some reason clippy thinks that the borrow is unnecessary... it isn't
-    #[allow(clippy::needless_borrow)]
     let mut proc = Command::new(bin.as_os_str());
     proc.stdout(Stdio::piped());
     proc.stderr(Stdio::inherit());
@@ -109,8 +105,6 @@ pub fn test_inject() {
     let bin = create_bin(TESTBIN, Some(ENT_XML_TARGET), false).unwrap();
     let lib = create_bin(TESTLIB, None, false).unwrap();
 
-    // For some reason clippy thinks that the borrow is unnecessary... it isn't
-    #[allow(clippy::needless_borrow)]
     let mut proc = Command::new(bin.as_os_str());
     proc.stdout(Stdio::piped());
     proc.stderr(Stdio::inherit());

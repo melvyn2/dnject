@@ -9,7 +9,8 @@ description = "The DNSense GUI injector, cross platform and wine-enabled"
 members = ["injector", "injector/testlib", "mach_util", "macos_portfetch", "macos_portfetch/macos_portfetch_internal"]
 
 [features]
-macos-ent-bypass = [ "macos_portfetch/exploit-CVE-2022-42855" ]  # No-op on non-darwin
+macos-ent-bypass = ["macos_portfetch/exploit-CVE-2022-42855"]  # No-op on non-darwin
+wine = ["wine_util"] # No-op on non-unix
 
 [dependencies]
 cpp_core = "0.6"
@@ -22,6 +23,9 @@ qt_ui_tools = "0.5"
 qt_core_custom_events = "0.2"
 sysinfo = "0.29"
 injector = { path = "injector" }
+
+[target.'cfg(target_family = "unix")'.dependencies]
+wine_util = { path = "wine_util", optional = true}
 
 [target.'cfg(target_os = "macos")'.dependencies]
 nix = "0.26"

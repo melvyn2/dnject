@@ -162,6 +162,25 @@ pub mod structs {
 
     #[repr(C)]
     #[derive(Copy, Clone, Debug, Default, Hash, PartialOrd, PartialEq, Eq, Ord)]
+    pub struct x86_debug_state64_t {
+        pub __dr0: u64,
+        pub __dr1: u64,
+        pub __dr2: u64,
+        pub __dr3: u64,
+        pub __dr4: u64,
+        pub __dr5: u64,
+        pub __dr6: u64,
+        pub __dr7: u64,
+    }
+
+    impl x86_debug_state64_t {
+        pub fn count() -> mach_msg_type_number_t {
+            (mem::size_of::<Self>() / mem::size_of::<libc::c_int>()) as mach_msg_type_number_t
+        }
+    }
+
+    #[repr(C)]
+    #[derive(Copy, Clone, Debug, Default, Hash, PartialOrd, PartialEq, Eq, Ord)]
     pub struct x86_thread_state32_t {
         pub __eax: u32,
         pub __ebx: u32,
@@ -189,6 +208,25 @@ pub mod structs {
 
     #[repr(C)]
     #[derive(Copy, Clone, Debug, Default, Hash, PartialOrd, PartialEq, Eq, Ord)]
+    pub struct x86_debug_state32_t {
+        pub __dr0: u32,
+        pub __dr1: u32,
+        pub __dr2: u32,
+        pub __dr3: u32,
+        pub __dr4: u32,
+        pub __dr5: u32,
+        pub __dr6: u32,
+        pub __dr7: u32,
+    }
+
+    impl x86_debug_state32_t {
+        pub fn count() -> mach_msg_type_number_t {
+            (mem::size_of::<Self>() / mem::size_of::<libc::c_int>()) as mach_msg_type_number_t
+        }
+    }
+
+    #[repr(C)]
+    #[derive(Copy, Clone, Debug, Default, Hash, PartialOrd, PartialEq, Eq, Ord)]
     pub struct arm_thread_state32_t {
         pub __r: [u32; 13],
         pub __sp: u32,
@@ -204,7 +242,8 @@ pub mod structs {
     }
 
     pub const __DARWIN_ARM_THREAD_STATE64_FLAGS_NO_PTRAUTH: u32 = 0x1;
-    // TODO add proper initialization with ptr-auth
+
+    // TODO properly deal with ptr-auth
     // for now just set flags to __DARWIN_ARM_THREAD_STATE64_FLAGS_NO_PTRAUTH
     #[repr(C)]
     #[derive(Copy, Clone, Debug, Default, Hash, PartialOrd, PartialEq, Eq, Ord)]
@@ -368,9 +407,14 @@ pub mod sysctl {
 pub mod tasks {
     //! This module corresponds to mach/task.defs.
 
+    use mach2::exception_types::{
+        exception_behavior_array_t, exception_behavior_t, exception_flavor_array_t,
+        exception_mask_array_t, exception_mask_t,
+    };
     use mach2::kern_return::kern_return_t;
-    use mach2::mach_types::{task_t, thread_act_t};
+    use mach2::mach_types::{exception_handler_array_t, task_t, thread_act_t};
     use mach2::message::mach_msg_type_number_t;
+    use mach2::port::mach_port_t;
     use mach2::thread_status::{thread_state_flavor_t, thread_state_t};
 
     extern "C" {
@@ -381,6 +425,19 @@ pub mod tasks {
             state_size: mach_msg_type_number_t,
             child_thread: *mut thread_act_t,
         ) -> kern_return_t;
+
+        pub fn task_swap_exception_ports(
+            task: task_t,
+            exception_mask: exception_mask_t,
+            new_port: mach_port_t,
+            behavior: exception_behavior_t,
+            new_flavor: thread_state_flavor_t,
+            masks: exception_mask_array_t,
+            masksCnt: *mut mach_msg_type_number_t,
+            old_handlers: exception_handler_array_t,
+            old_behaviors: exception_behavior_array_t,
+            old_flavors: exception_flavor_array_t,
+        ) -> kern_return_t;
     }
 }
 
@@ -389,8 +446,17 @@ pub mod thread_act {
 
     use mach2::kern_return::kern_return_t;
     use mach2::mach_types::thread_act_t;
+    use mach2::message::mach_msg_type_number_t;
+    use mach2::thread_status::{thread_state_flavor_t, thread_state_t};
 
     extern "C" {
+        pub fn thread_set_state(
+            target_act: thread_act_t,
+            flavor: thread_state_flavor_t,
+            new_state: thread_state_t,
+            new_state_count: mach_msg_type_number_t,
+        ) -> kern_return_t;
+
         pub fn thread_terminate(thread: thread_act_t) -> kern_return_t;
     }
 }
@@ -416,6 +482,23 @@ pub mod traps {
         pub fn pid_for_task(task: task_t, pid: *mut c_int) -> kern_return_t;
 
         pub fn _thread_set_tsd_base(base: *mut c_void);
+    }
+}
+
+pub mod vm {
+    use mach2::kern_return::kern_return_t;
+    use mach2::mach_types::host_priv_t;
+    use mach2::vm_prot::vm_prot_t;
+    use mach2::vm_types::{mach_vm_address_t, mach_vm_size_t, vm_map_t};
+
+    extern "C" {
+        pub fn mach_vm_wire(
+            host_priv: host_priv_t,
+            task: vm_map_t,
+            address: mach_vm_address_t,
+            size: mach_vm_size_t,
+            desired_access: vm_prot_t,
+        ) -> kern_return_t;
     }
 }
 

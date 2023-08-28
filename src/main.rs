@@ -36,8 +36,12 @@ use injector::{InjectorError, InjectorErrorKind, ModHandle, ProcHandle};
 mod ui;
 use crate::term_spawn::spawn_term;
 use ui::MainUI;
+use wine_util::WineEnv;
 
 mod term_spawn;
+
+#[cfg(all(feature = "wine", not(target_family = "unix")))]
+compile_error!("wine mode not supported on non-unix");
 
 #[derive(Debug)]
 struct TextEditLogger {
@@ -110,8 +114,6 @@ impl Log for TextEditLogger {
 struct MainWindow {
     ui: MainUI,
     system_data: RefCell<System>,
-    wine_prefix_saved: RefCell<String>,
-    wine_loc_saved: RefCell<String>,
     child_handle: RefCell<Option<Child>>,
     target_process: RefCell<Option<Pid>>,
     target_handle: RefCell<Option<ProcHandle>>,
@@ -129,8 +131,6 @@ impl MainWindow {
         let new = Rc::new(Self {
             ui: MainUI::new(),
             system_data: RefCell::new(System::new_with_specifics(RefreshKind::new())),
-            wine_prefix_saved: RefCell::new("".to_string()),
-            wine_loc_saved: RefCell::new("".to_string()),
             child_handle: RefCell::default(),
             target_process: RefCell::default(),
             target_handle: RefCell::default(),
@@ -140,9 +140,8 @@ impl MainWindow {
         unsafe {
             new.qt_init();
 
-            new.on_back_clicked();
-
             new.on_refresh_clicked();
+
             let logger = Box::new(TextEditLogger::new(
                 new.ui.log_box.clone(),
                 LevelFilter::Trace,
@@ -153,6 +152,7 @@ impl MainWindow {
         new
     }
 
+    // Static UI/Qt init
     unsafe fn qt_init(self: &Rc<Self>) {
         self.add_event_filters();
 
@@ -162,6 +162,10 @@ impl MainWindow {
         timer.timeout().connect(&self.slot_refresh_target_info());
         timer.start_1a(1000);
         self.process_refresh_timer.replace(Some(timer));
+
+        self.ui.wine_mode_gbox.set_visible(cfg!(feature = "wine"));
+        self.adjust_wine_inputs();
+        self.on_back_clicked();
 
         self.ui.main.show();
     }
@@ -266,11 +270,6 @@ impl MainWindow {
         );
         bind!(
             proc_table,
-            item_selection_changed,
-            slot_on_proc_table_selection
-        );
-        bind!(
-            proc_table,
             item_double_clicked,
             slot_on_proc_table_item_double_clicked
         );
@@ -333,6 +332,12 @@ impl MainWindow {
         self.ui
             .probe_button
             .set_enabled(!self.ui.proc_table.selected_items().is_empty());
+        if self.ui.wine_mode_gbox.is_enabled() && !self.ui.proc_table.selected_items().is_empty() {
+            let proc_line = self.ui.proc_table.selected_items().take_first();
+            let pid = proc_line.data(1, 0).to_u_int_0a();
+
+            // TODO set wine vars
+        }
     }
 
     #[slot(SlotOfQTreeWidgetItemInt)]
@@ -350,7 +355,7 @@ impl MainWindow {
         self.ui.proc_table.clear();
 
         let ownership_filter = self.ui.proc_owner_filter.is_checked();
-        // let wine_mode = self.ui.wine_mode_gbox.is_checked();
+        let wine_mode = self.ui.wine_mode_gbox.is_checked();
 
         let mut system = self.system_data.borrow_mut();
         system.refresh_specifics(
@@ -369,6 +374,11 @@ impl MainWindow {
             if ownership_filter && proc.user_id().map(|uid| uid != cur_uid).unwrap_or(true) {
                 continue;
             }
+            #[cfg(feature = "wine")]
+            if wine_mode && WineEnv::get(pid.as_u32() as pid_t).ok().flatten().is_none() {
+                continue;
+            }
+
             // This doesn't leak because parent (QTreeWidget) drops the item
             let proc_item: Ptr<QTreeWidgetItem> =
                 QTreeWidgetItem::from_q_tree_widget(&self.ui.proc_table).into_ptr();
@@ -493,38 +503,14 @@ impl MainWindow {
         let tab = self.ui.target_tabs.current_index();
         let wine_editable = wine_box && tab == 1;
 
-        // Only save when leaving editable mode
-        if (self.ui.wine_loc.is_editable() || self.ui.wine_prefix.is_editable()) && !wine_editable {
-            self.save_wine_params();
-        }
         self.ui.wine_prefix.set_enabled(wine_editable);
+        self.ui.wine_prefix.line_edit().set_visible(wine_box);
         self.ui.wine_loc.set_enabled(wine_editable);
-        if wine_editable {
-            self.restore_wine_params();
-        } else {
-            self.ui.wine_prefix.set_edit_text(&qs(""));
-            self.ui.wine_loc.set_edit_text(&qs(""));
-        }
-    }
+        self.ui.wine_loc.line_edit().set_visible(wine_box);
 
-    unsafe fn save_wine_params(self: &Rc<Self>) {
-        let pfx_cur = self.ui.wine_prefix.current_text().to_std_string();
-        let loc_cur = self.ui.wine_loc.current_text().to_std_string();
-        if !pfx_cur.trim().is_empty() {
-            self.wine_prefix_saved.replace(pfx_cur);
+        if wine_box && tab == 0 {
+            self.on_proc_table_selection()
         }
-        if !loc_cur.trim().is_empty() {
-            self.wine_loc_saved.replace(loc_cur);
-        }
-    }
-
-    unsafe fn restore_wine_params(self: &Rc<Self>) {
-        self.ui
-            .wine_prefix
-            .set_current_text(qs::<&str>(self.wine_prefix_saved.borrow().as_ref()).as_ref());
-        self.ui
-            .wine_loc
-            .set_current_text(qs::<&str>(self.wine_loc_saved.borrow().as_ref()).as_ref());
     }
 
     unsafe fn probe_pid(self: &Rc<Self>, target: Pid) -> Result<(), ()> {
