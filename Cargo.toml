@@ -28,7 +28,7 @@ injector = { path = "injector" }
 wine_util = { path = "wine_util", optional = true}
 
 [target.'cfg(target_os = "macos")'.dependencies]
-nix = "0.26"
+nix = { version = "0.27", features = [ "fs" ] }
 mach_util = { path = "mach_util" }
 macos_portfetch = { path = "macos_portfetch" }
 

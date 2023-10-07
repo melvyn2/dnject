@@ -11,20 +11,19 @@ use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::ptr::null_mut;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicPtr, Ordering};
 
-use log::{Level, LevelFilter, Log, Metadata, Record};
+use log::LevelFilter;
 
-use cpp_core::{CppDeletable, Ptr, Ref, StaticUpcast};
 use libc::pid_t;
 
+use cpp_core::{CppDeletable, Ptr, Ref, StaticUpcast};
+
 use qt_core::{
-    q_event, qs, slot, ConnectionType, DropAction, GlobalColor, ItemFlag, QBox, QEvent, QObject,
-    QOperatingSystemVersion, QPtr, QString, QTimer, QVariant, SignalNoArgs, SignalOfQString,
-    SlotNoArgs, SlotOfBool, SlotOfInt, SlotOfQString,
+    q_event, qs, slot, DropAction, ItemFlag, QBox, QEvent, QObject, QOperatingSystemVersion,
+    QString, QTimer, QVariant, SlotNoArgs, SlotOfBool, SlotOfInt, SlotOfQString,
 };
 use qt_core_custom_events::custom_event_filter::CustomEventFilter;
-use qt_gui::{QColor, QDragEnterEvent, QDropEvent};
+use qt_gui::{QDragEnterEvent, QDropEvent};
 use qt_widgets::*;
 
 use sysinfo::{
@@ -33,83 +32,20 @@ use sysinfo::{
 
 use injector::{InjectorError, InjectorErrorKind, ModHandle, ProcHandle};
 
-mod ui;
-use crate::term_spawn::spawn_term;
-use ui::MainUI;
+#[cfg(feature = "wine")]
 use wine_util::WineEnv;
 
+mod ui;
+use ui::MainUI;
+
 mod term_spawn;
+use term_spawn::spawn_term;
+
+mod text_edit_logger;
+use text_edit_logger::TextEditLogger;
 
 #[cfg(all(feature = "wine", not(target_family = "unix")))]
 compile_error!("wine mode not supported on non-unix");
-
-#[derive(Debug)]
-struct TextEditLogger {
-    max_level: LevelFilter,
-    append_signal_ptr: AtomicPtr<SignalOfQString>,
-    text_color_signal_ptr: AtomicPtr<SignalOfQColor>,
-}
-
-impl TextEditLogger {
-    unsafe fn new(text_edit: QPtr<QTextEdit>, max_level: LevelFilter) -> Self {
-        log::set_max_level(max_level);
-
-        let clear_signal = SignalNoArgs::new();
-        clear_signal.connect_with_type(ConnectionType::QueuedConnection, text_edit.slot_clear());
-        clear_signal.emit();
-
-        let append_signal = SignalOfQString::new();
-        append_signal.connect_with_type(ConnectionType::QueuedConnection, text_edit.slot_append());
-        let text_color_signal = SignalOfQColor::new();
-        text_color_signal.connect_with_type(
-            ConnectionType::QueuedConnection,
-            text_edit.slot_set_text_color(),
-        );
-        Self {
-            // into_raw_ptr "leaks" the box so the underlying object won't get deleted
-            // Therefore this ptr is never null and its pointed data never uninitialized
-            append_signal_ptr: AtomicPtr::new(append_signal.into_raw_ptr()),
-            text_color_signal_ptr: AtomicPtr::new(text_color_signal.into_raw_ptr()),
-            max_level,
-        }
-    }
-}
-
-impl Log for TextEditLogger {
-    fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level() <= self.max_level
-    }
-
-    fn log(&self, record: &Record) {
-        if !self.enabled(record.metadata()) || record.metadata().target().contains("goblin") {
-            return;
-        }
-
-        let log_line = format!("{} [{}] {}", record.level(), record.target(), record.args());
-        // No dark mode detection, yay! White background is forced in .ui file
-        let color = match record.level() {
-            Level::Error => (GlobalColor::Red, 31),
-            Level::Warn => (GlobalColor::DarkYellow, 33),
-            Level::Info => (GlobalColor::Black, 39),
-            Level::Debug => (GlobalColor::DarkGray, 90),
-            Level::Trace => (GlobalColor::DarkBlue, 34),
-        };
-
-        // TODO windows?
-        println!("\x1b[{}m{}\x1b[39;49m", color.1, log_line);
-
-        let text_color_signal_ptr = self.text_color_signal_ptr.load(Ordering::Acquire);
-        let append_signal_ptr = self.append_signal_ptr.load(Ordering::Acquire);
-        unsafe {
-            let text_color_signal = text_color_signal_ptr.as_ref().unwrap();
-            text_color_signal.emit(&QColor::from_global_color(color.0));
-            let append_signal = append_signal_ptr.as_ref().unwrap();
-            append_signal.emit(&qs(log_line));
-        };
-    }
-
-    fn flush(&self) {}
-}
 
 struct MainWindow {
     ui: MainUI,
@@ -332,11 +268,24 @@ impl MainWindow {
         self.ui
             .probe_button
             .set_enabled(!self.ui.proc_table.selected_items().is_empty());
-        if self.ui.wine_mode_gbox.is_enabled() && !self.ui.proc_table.selected_items().is_empty() {
+        if self.ui.wine_mode_gbox.is_checked() && !self.ui.proc_table.selected_items().is_empty() {
             let proc_line = self.ui.proc_table.selected_items().take_first();
-            let pid = proc_line.data(1, 0).to_u_int_0a();
+            let pid = proc_line.data(1, 0).to_u_int_0a() as pid_t;
 
-            // TODO set wine vars
+            // TODO handle error
+            let env = WineEnv::get(pid, self.system_data.borrow_mut().deref())
+                .ok()
+                .flatten()
+                .unwrap();
+            self.ui
+                .wine_loc
+                .set_edit_text(&qs(env.wine_loader().to_string_lossy()));
+            self.ui.wine_prefix.set_edit_text(&qs(env
+                .prefix()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or("Unspecified (~/.wine)".to_string())));
+            // Default is always ~/.wine https://www.winehq.org/docs/wine
+            // TODO maybe show all vars?
         }
     }
 
@@ -353,6 +302,8 @@ impl MainWindow {
     #[slot(SlotNoArgs)]
     unsafe fn on_refresh_clicked(self: &Rc<Self>) {
         self.ui.proc_table.clear();
+        self.ui.proc_refresh.set_enabled(false);
+        self.ui.proc_refresh.set_text(&qs("Refreshing..."));
 
         let ownership_filter = self.ui.proc_owner_filter.is_checked();
         let wine_mode = self.ui.wine_mode_gbox.is_checked();
@@ -374,15 +325,29 @@ impl MainWindow {
             if ownership_filter && proc.user_id().map(|uid| uid != cur_uid).unwrap_or(true) {
                 continue;
             }
+
+            let mut name = qs(proc.name());
+
             #[cfg(feature = "wine")]
-            if wine_mode && WineEnv::get(pid.as_u32() as pid_t).ok().flatten().is_none() {
-                continue;
+            if wine_mode {
+                if let Some(exe) = (WineEnv::get(pid.as_u32() as pid_t, system.deref()))
+                    .ok()
+                    .flatten()
+                    .map(|e| e.target_exe().map(|s| s.to_owned()))
+                    .flatten()
+                {
+                    name = exe.rsplit_once('\\').map(|(_, e)| qs(e)).unwrap_or(qs(exe));
+                } else {
+                    continue;
+                }
             }
 
             // This doesn't leak because parent (QTreeWidget) drops the item
+            // see https://doc.qt.io/qt-5/qtreewidget.html#clear
             let proc_item: Ptr<QTreeWidgetItem> =
                 QTreeWidgetItem::from_q_tree_widget(&self.ui.proc_table).into_ptr();
-            proc_item.set_text(0, &qs(proc.name()));
+            proc_item.set_text(0, &name);
+            proc_item.set_tool_tip(0, &name);
             // Use data rather than text to allow sorting
             proc_item.set_data(1, 0, &QVariant::from_uint(pid.as_u32()));
             proc_item.set_text(
@@ -396,6 +361,9 @@ impl MainWindow {
                 },
             );
         }
+
+        self.ui.proc_refresh.set_text(&qs("Refresh"));
+        self.ui.proc_refresh.set_enabled(true);
     }
 
     #[slot(SlotOfQString)]
@@ -491,14 +459,15 @@ impl MainWindow {
     }
 
     #[slot(SlotOfBool)]
-    unsafe fn on_wine_toggled(self: &Rc<Self>, _: bool) {
+    unsafe fn on_wine_toggled(self: &Rc<Self>, state: bool) {
         self.adjust_wine_inputs();
-        log::error!("wine mode unimpl");
+        self.on_refresh_clicked();
+        if state {
+            log::error!("wine mode unimpl");
+        }
     }
 
     unsafe fn adjust_wine_inputs(self: &Rc<Self>) {
-        log::trace!("adjust_wine_inputs called");
-
         let wine_box = self.ui.wine_mode_gbox.is_checked();
         let tab = self.ui.target_tabs.current_index();
         let wine_editable = wine_box && tab == 1;
@@ -507,10 +476,6 @@ impl MainWindow {
         self.ui.wine_prefix.line_edit().set_visible(wine_box);
         self.ui.wine_loc.set_enabled(wine_editable);
         self.ui.wine_loc.line_edit().set_visible(wine_box);
-
-        if wine_box && tab == 0 {
-            self.on_proc_table_selection()
-        }
     }
 
     unsafe fn probe_pid(self: &Rc<Self>, target: Pid) -> Result<(), ()> {

@@ -5,10 +5,12 @@ use std::mem::{size_of, MaybeUninit};
 
 use libc::{c_int, c_void, pid_t, proc_pidinfo, vnode_info_path};
 
-const PROC_PIDREGIONPATHINFO: c_int = 8;
+// Private proc_pidinfo flavor that only returns vnode-backed mappings and is 10-100x faster
+// than PROC_PIDREGIONPATHINFO
+const PROC_PIDREGIONPATHINFO2: c_int = 0x16;
 const PROC_PIDREGIONPATHINFO_SIZE: c_int = size_of::<proc_regionwithpathinfo>() as c_int;
 
-pub fn mem_regions_for_pid(pid: pid_t) -> Result<Vec<proc_regionwithpathinfo>, std::io::Error> {
+pub fn mappings_for_pid(pid: pid_t) -> Result<Vec<proc_regionwithpathinfo>, std::io::Error> {
     let mut r = vec![];
     let mut addr: u64 = 0;
     loop {
@@ -16,7 +18,7 @@ pub fn mem_regions_for_pid(pid: pid_t) -> Result<Vec<proc_regionwithpathinfo>, s
         let written = unsafe {
             proc_pidinfo(
                 pid,
-                PROC_PIDREGIONPATHINFO,
+                PROC_PIDREGIONPATHINFO2,
                 addr,
                 reg.as_mut_ptr() as *mut c_void,
                 PROC_PIDREGIONPATHINFO_SIZE,

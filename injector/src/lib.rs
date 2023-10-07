@@ -1,7 +1,6 @@
 //! A cross-platform API to inject dynamic code objects into other processes.
 //! All functionality resides in the [ProcHandle] struct
 
-#![feature(const_cstr_methods)]
 #![feature(core_intrinsics)]
 #![feature(io_error_more)]
 #![feature(optimize_attribute)]
@@ -9,7 +8,6 @@
 #![feature(unchecked_math)]
 #![feature(allocator_api)]
 #![feature(ptr_as_uninit)]
-#![feature(extern_types)]
 #![feature(if_let_guard)]
 
 #[cfg(target_os = "macos")]
