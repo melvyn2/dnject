@@ -151,13 +151,13 @@ pub fn get_port_admin_exploit(target: pid_t) -> Result<mach_port_t, std::io::Err
 
 /// Returns an error if the target doesn't exist
 fn check_pid_exists(target: pid_t) -> Result<(), std::io::Error> {
-    if unsafe { libc::kill(target, 0) } != 0 {
-        if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
-            return Err(std::io::Error::new(
-                ErrorKind::NotFound,
-                "target process does not exist",
-            ));
-        }
+    if unsafe { libc::kill(target, 0) } != 0
+        && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    {
+        return Err(std::io::Error::new(
+            ErrorKind::NotFound,
+            "target process does not exist",
+        ));
     }
     Ok(())
 }
@@ -190,7 +190,7 @@ fn process_child<I: Write, O: Read + AsRawFd>(
     };
     bincode::encode_into_std_write(input, &mut stdin, bincode::config::standard()).unwrap();
     // Flush stdin by newline
-    stdin.write(b"\n")?;
+    stdin.write_all(b"\n")?;
     drop(stdin);
 
     let mut t_stdout = timeout_readwrite::TimeoutReader::new(stdout, Duration::from_millis(50));

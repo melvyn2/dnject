@@ -10,10 +10,39 @@
 #![feature(ptr_as_uninit)]
 #![feature(if_let_guard)]
 
+use std::path::PathBuf;
+
+use libc::c_void;
+
+mod error;
+pub use error::{InjectorError, InjectorErrorKind};
+
+// On macOS and Linux, a module handle is an opaque pointer
+// On windows, it is an HMODULE which is a pointer to the base address of the module in the target
+pub type ModHandle = (PathBuf, *mut c_void);
+
+// Ensure consistent API
+trait InjectorTrait: Sized {
+    fn new(cmd: Command) -> Result<Self, InjectorError>;
+
+    fn inject(&mut self, libs: &[PathBuf]) -> Result<(), InjectorError>;
+
+    fn eject(&mut self, handles: Option<&[ModHandle]>) -> Result<(), InjectorError>;
+
+    unsafe fn eject_raw(&mut self, handles: &[*mut c_void]) -> Result<(), InjectorError>;
+
+    fn current_modules(&self) -> &[ModHandle];
+
+    fn kill(self) -> Result<(), InjectorError>;
+}
+
+// Import implementation for target
+
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
-pub use macos::{ModHandle, ProcHandle};
+pub use macos::ProcHandle;
+use std::process::Command;
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -24,62 +53,3 @@ pub use linux::ProcHandle;
 mod nt;
 #[cfg(target_os = "windows")]
 pub use nt::ProcHandle;
-
-#[derive(Debug, Clone)]
-pub enum InjectorErrorKind {
-    InvalidArchitecture,
-    AttachFailure,
-    AttachPermission,
-    InvalidProcessHandle,
-    // Index of invalid handles
-    ModuleHandlesNotOwned(Vec<usize>),
-    TooManyModules,
-    RemoteFailure,
-    PartialSuccess(usize),
-    PartialSuccessRaw(Vec<*mut libc::c_void>),
-    IoError(std::io::ErrorKind),
-    #[cfg(target_os = "macos")]
-    MachError(mach_util::error::MachErrorKind),
-    Unknown,
-}
-
-pub struct InjectorError {
-    kind: InjectorErrorKind,
-    msg: String,
-}
-
-impl std::fmt::Debug for InjectorError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}: {}", self.kind, self.msg)
-    }
-}
-
-impl std::fmt::Display for InjectorError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.msg)
-    }
-}
-
-impl std::error::Error for InjectorError {}
-
-impl From<std::io::Error> for InjectorError {
-    fn from(value: std::io::Error) -> Self {
-        Self {
-            kind: InjectorErrorKind::IoError(value.kind()),
-            msg: value.to_string(),
-        }
-    }
-}
-
-impl InjectorError {
-    fn new<S: ToString>(kind: InjectorErrorKind, msg: S) -> Self {
-        Self {
-            kind,
-            msg: msg.to_string(),
-        }
-    }
-
-    pub fn kind(&self) -> &InjectorErrorKind {
-        &self.kind
-    }
-}

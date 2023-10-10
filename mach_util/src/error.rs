@@ -135,6 +135,8 @@ impl From<kern_return_t> for MachErrorKind {
     }
 }
 
+// Explicitly don't want to have From conversion
+#[allow(clippy::from_over_into)]
 impl Into<kern_return_t> for MachErrorKind {
     fn into(self) -> kern_return_t {
         // SAFETY: inner representation is guaranteed to be i32 and variants are all valid error constants

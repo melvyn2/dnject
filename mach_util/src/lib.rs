@@ -127,7 +127,7 @@ impl TempFile {
                 .map(|d| d.as_nanos())
                 .unwrap(),
         );
-        let ext = ext.map(|s| format!(".{}", s)).unwrap_or_else(String::new);
+        let ext = ext.map(|s| format!(".{}", s)).unwrap_or_default();
         Self::from(PathBuf::from(format!(
             "/tmp/{}-{:x}{}",
             prefix,

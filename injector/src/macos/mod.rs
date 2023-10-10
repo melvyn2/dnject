@@ -30,7 +30,7 @@ use mach_util::thread_act::thread_terminate;
 use mach_util::traps::pid_for_task;
 use mach_util::{get_pid_cpu_type, mach_try};
 
-use crate::{InjectorError, InjectorErrorKind};
+use crate::{InjectorError, InjectorErrorKind, InjectorTrait, ModHandle};
 
 mod bootstrap;
 
@@ -50,6 +50,7 @@ fn ensure_matching_arch(target: pid_t) -> Result<(), InjectorError> {
     Ok(())
 }
 
+#[doc(hidden)]
 impl From<MachError> for InjectorError {
     fn from(value: MachError) -> Self {
         Self::new(
@@ -59,7 +60,7 @@ impl From<MachError> for InjectorError {
     }
 }
 
-/// A handle to a native process which can be injected into
+/// A handle to a native process with library injection capabilities.
 /// # Process
 /// Injection on macOS happens in roughly 3 different phases:
 /// 1. Acquire target task port
@@ -102,13 +103,15 @@ impl From<MachError> for InjectorError {
 ///         - the injected dylib is signed as a platform binary (only possible with exploit)
 // TODO if `com.apple.security.cs.allow-unsigned-executable-memory` is present but not
 // `com.apple.security.cs.disable-library-validation`, we could probably manually map?
+/// # Limitations
+/// Only 255 libraries can be injected in a single [inject](Self::inject) call,
+/// and only 255 modules can be ejected in a single [eject](Self::eject) call.
 pub struct ProcHandle {
     pid: pid_t,
     task_port: mach_port_t,
     child_handle: Option<Child>,
     modules: Vec<ModHandle>,
 }
-pub type ModHandle = (PathBuf, *mut c_void);
 
 impl TryFrom<pid_t> for ProcHandle {
     type Error = InjectorError;
@@ -447,7 +450,7 @@ impl ProcHandle {
             Ok(h) => {
                 let new_handles = h.unwrap();
                 let mut new_modules: Vec<ModHandle> =
-                    std::iter::zip(libs.iter().cloned(), new_handles.into_iter()).collect();
+                    std::iter::zip(libs.iter().cloned(), new_handles).collect();
                 self.modules.append(&mut new_modules);
 
                 Ok(())
@@ -473,8 +476,8 @@ impl ProcHandle {
             let mut non_owned_idx: Vec<usize> = Vec::new();
             // This is necessary to remove one match at a time rather than all matches
             for (idx, target) in handles.iter().enumerate() {
-                if let Some(p) = owned_mods.iter().position(|c| c.1 == target.1) {
-                    owned_mods.remove(p);
+                if let Some(rem_idx) = owned_mods.iter().position(|cand| cand.1 == target.1) {
+                    owned_mods.remove(rem_idx);
                 } else {
                     non_owned_idx.push(idx);
                     non_owned.push(target);
@@ -491,6 +494,7 @@ impl ProcHandle {
             let raw_handles = handles.iter().map(|m| m.1).collect::<Vec<*mut c_void>>();
             (owned_mods, raw_handles)
         } else {
+            // Collect all handles to eject
             let raw_handles = self
                 .modules
                 .iter()
@@ -524,6 +528,16 @@ impl ProcHandle {
     /// # Safety
     /// The caller must ensure that the handle is valid for the target process
     pub unsafe fn eject_raw(&mut self, handles: &[*mut c_void]) -> Result<(), InjectorError> {
+        if handles.len() >= u8::MAX as usize {
+            return Err(InjectorError::new(
+                InjectorErrorKind::TooManyModules,
+                format!(
+                    "too many module handles for a single eject call (max {})",
+                    u8::MAX - 1
+                ),
+            ));
+        }
+
         self.do_remote(None, Some(handles)).map(|_| ())
     }
 
@@ -1159,7 +1173,7 @@ impl ProcHandle {
     }
 
     /// Returns the paths of the currently injected modules
-    pub fn current_modules(&self) -> &[(PathBuf, *mut c_void)] {
+    pub fn current_modules(&self) -> &[ModHandle] {
         &self.modules
     }
 
@@ -1187,6 +1201,34 @@ impl ProcHandle {
             }
             Err(e) => Err(e),
         }
+    }
+}
+
+// TODO make this not completely stupid
+// at least this checks API kinda
+impl InjectorTrait for ProcHandle {
+    fn new(cmd: Command) -> Result<Self, InjectorError> {
+        Self::new(cmd)
+    }
+
+    fn inject(&mut self, libs: &[PathBuf]) -> Result<(), InjectorError> {
+        self.inject(libs)
+    }
+
+    fn eject(&mut self, handles: Option<&[ModHandle]>) -> Result<(), InjectorError> {
+        self.eject(handles)
+    }
+
+    unsafe fn eject_raw(&mut self, handles: &[*mut c_void]) -> Result<(), InjectorError> {
+        self.eject_raw(handles)
+    }
+
+    fn current_modules(&self) -> &[ModHandle] {
+        self.current_modules()
+    }
+
+    fn kill(self) -> Result<(), InjectorError> {
+        self.kill()
     }
 }
 

@@ -268,6 +268,8 @@ impl MainWindow {
         self.ui
             .probe_button
             .set_enabled(!self.ui.proc_table.selected_items().is_empty());
+
+        #[cfg(feature = "wine")]
         if self.ui.wine_mode_gbox.is_checked() && !self.ui.proc_table.selected_items().is_empty() {
             let proc_line = self.ui.proc_table.selected_items().take_first();
             let pid = proc_line.data(1, 0).to_u_int_0a() as pid_t;
@@ -326,7 +328,7 @@ impl MainWindow {
                 continue;
             }
 
-            let mut name = qs(proc.name());
+            let mut wine_exe: Option<String> = None;
 
             #[cfg(feature = "wine")]
             if wine_mode {
@@ -336,7 +338,7 @@ impl MainWindow {
                     .map(|e| e.target_exe().map(|s| s.to_owned()))
                     .flatten()
                 {
-                    name = exe.rsplit_once('\\').map(|(_, e)| qs(e)).unwrap_or(qs(exe));
+                    wine_exe = Some(exe);
                 } else {
                     continue;
                 }
@@ -346,8 +348,31 @@ impl MainWindow {
             // see https://doc.qt.io/qt-5/qtreewidget.html#clear
             let proc_item: Ptr<QTreeWidgetItem> =
                 QTreeWidgetItem::from_q_tree_widget(&self.ui.proc_table).into_ptr();
-            proc_item.set_text(0, &name);
-            proc_item.set_tool_tip(0, &name);
+            #[cfg(feature = "wine")]
+            {
+                proc_item.set_text(
+                    0,
+                    &(wine_exe
+                        .as_ref()
+                        .map(|e| e.rsplit_once('\\').map(|(_, last)| qs(last)))
+                        .flatten()
+                        .unwrap_or_else(|| {
+                            wine_exe.as_ref().map(qs).unwrap_or_else(|| qs(proc.name()))
+                        })),
+                );
+                proc_item.set_tool_tip(
+                    0,
+                    &(wine_exe
+                        .as_ref()
+                        .map(qs)
+                        .unwrap_or_else(|| qs(proc.exe().to_string_lossy()))),
+                );
+            }
+            #[cfg(not(feature = "wine"))]
+            {
+                proc_item.set_text(0, &qs(proc.name()));
+                proc_item.set_tool_tip(0, &qs(proc.exe().to_string_lossy()));
+            }
             // Use data rather than text to allow sorting
             proc_item.set_data(1, 0, &QVariant::from_uint(pid.as_u32()));
             proc_item.set_text(

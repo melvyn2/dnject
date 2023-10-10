@@ -34,3 +34,7 @@ mach_util = { path = "../mach_util" }
 # TODO check if custom source still required
 apple-codesign = { git = "https://github.com/melvyn2/apple-platform-rs.git", default-features = false }
 macos_portfetch = { path = "../macos_portfetch" }
+
+
+[target.'cfg(target_os = "windows")'.dependencies]
+dll-syringe = "0.15"
