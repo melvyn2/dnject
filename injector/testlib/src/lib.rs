@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 
-use libc::{write, STDOUT_FILENO};
+use libc::{c_uint, write, STDOUT_FILENO};
 
 // Use libc write instead of rust stdout write because stdout struct may not exist
 // See https://github.com/mmastrac/rust-ctor#warnings
@@ -35,5 +35,11 @@ static FOO: extern "C" fn() = {
 };
 
 fn write_ascii_buf(buf: &[u8]) {
-    unsafe { write(STDOUT_FILENO, buf.as_ptr() as *const c_void, buf.len()) };
+    unsafe {
+        write(
+            STDOUT_FILENO,
+            buf.as_ptr() as *const c_void,
+            buf.len() as c_uint,
+        )
+    };
 }

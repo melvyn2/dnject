@@ -1,6 +1,6 @@
 #[derive(Debug, Clone)]
 pub enum InjectorErrorKind {
-    /// The injector crate was compiled for a different architecture than the target process.
+    /// The injector crate or injected module do not support the architecture of the target process.
     InvalidArchitecture,
     /// An unspecified non-permissions-related error occurred while attaching to the target process.
     AttachFailure,
@@ -8,6 +8,8 @@ pub enum InjectorErrorKind {
     AttachPermission,
     /// The provided process handle is invalid.
     InvalidProcessHandle,
+    /// The target process or handle no longer exists.
+    ProcessExited,
     /// Modules passed to `eject` were not owned by the injector instance. The indexes in the argument array
     /// of the non-owned handles are returned.
     ModuleHandlesNotOwned(Vec<usize>),
@@ -16,11 +18,10 @@ pub enum InjectorErrorKind {
     TooManyModules,
     /// Shellcode in the remote process failed to execute or complete the task.
     RemoteFailure,
-    /// Only some libraries were injected or modules were injected,
-    /// with the the index in the argument array of the failing library/module returned.
-    /// All previous arguments were successfully acted upon.
-    PartialSuccess(usize),
-    /// Internal error to preserve currently-injected modules
+    /// The OS module loader returned an error for the library or module whose index in the argument
+    /// array is returned. The loader error message is contained in the error text.
+    LoaderError(usize),
+    /// Internal error to preserve currently-injected modules.
     #[doc(hidden)]
     PartialSuccessRaw(Vec<*mut libc::c_void>),
     /// A generic operating-system error occurred. The wrapped error is returned.

@@ -30,7 +30,7 @@ use mach_util::thread_act::thread_terminate;
 use mach_util::traps::pid_for_task;
 use mach_util::{get_pid_cpu_type, mach_try};
 
-use crate::{InjectorError, InjectorErrorKind, InjectorTrait, ModHandle};
+use crate::{InjectorError, InjectorErrorKind, ModHandle};
 
 mod bootstrap;
 
@@ -423,7 +423,7 @@ impl ProcHandle {
                         );
                     }
                     Err(InjectorError::new(
-                        InjectorErrorKind::PartialSuccess(shared_map.successes as usize),
+                        InjectorErrorKind::LoaderError(shared_map.successes as usize),
                         error_msg,
                     ))
                 } else {
@@ -460,7 +460,7 @@ impl ProcHandle {
                     std::iter::zip(libs.iter().cloned(), new_handles.iter().cloned()).collect();
                 self.modules.append(&mut new_modules);
 
-                Err(InjectorError::new(InjectorErrorKind::PartialSuccess(new_handles.len()), e.to_string()))
+                Err(InjectorError::new(InjectorErrorKind::LoaderError(new_handles.len()), e.to_string()))
             },
             Err(e) => Err(e)
         };
@@ -517,7 +517,7 @@ impl ProcHandle {
                         self.modules.remove(pos);
                     }
                 }
-                Err(InjectorError::new(InjectorErrorKind::PartialSuccess(ejected_handles.len()), e.to_string()))
+                Err(InjectorError::new(InjectorErrorKind::LoaderError(ejected_handles.len()), e.to_string()))
             }
             Err(e) => Err(e)
         }
@@ -1203,35 +1203,6 @@ impl ProcHandle {
         }
     }
 }
-
-// TODO make this not completely stupid
-// at least this checks API kinda
-impl InjectorTrait for ProcHandle {
-    fn new(cmd: Command) -> Result<Self, InjectorError> {
-        Self::new(cmd)
-    }
-
-    fn inject(&mut self, libs: &[PathBuf]) -> Result<(), InjectorError> {
-        self.inject(libs)
-    }
-
-    fn eject(&mut self, handles: Option<&[ModHandle]>) -> Result<(), InjectorError> {
-        self.eject(handles)
-    }
-
-    unsafe fn eject_raw(&mut self, handles: &[*mut c_void]) -> Result<(), InjectorError> {
-        self.eject_raw(handles)
-    }
-
-    fn current_modules(&self) -> &[ModHandle] {
-        self.current_modules()
-    }
-
-    fn kill(self) -> Result<(), InjectorError> {
-        self.kill()
-    }
-}
-
 impl Drop for ProcHandle {
     fn drop(&mut self) {
         unsafe { mach_port_deallocate(mach_task_self(), self.task_port) };

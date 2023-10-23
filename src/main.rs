@@ -14,6 +14,7 @@ use std::rc::Rc;
 
 use log::LevelFilter;
 
+#[cfg(any(feature = "wine", target_os = "macos"))]
 use libc::pid_t;
 
 use cpp_core::{CppDeletable, Ptr, Ref, StaticUpcast};
@@ -956,7 +957,7 @@ impl MainWindow {
                 self.on_lib_changed(-1);
             }
             Err(e) => {
-                if let InjectorErrorKind::PartialSuccess(idx) = e.kind() {
+                if let InjectorErrorKind::LoaderError(idx) = e.kind() {
                     for i in 0..*idx {
                         self.ui.lib_list.take_item(i as c_int).delete();
                     }

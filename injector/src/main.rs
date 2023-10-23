@@ -4,8 +4,6 @@ use injector::ProcHandle;
 use std::path::PathBuf;
 use std::process::{exit, Child, Command, Stdio};
 
-use libc::pid_t;
-
 use sysinfo::{PidExt, ProcessExt, ProcessRefreshKind, RefreshKind, SystemExt};
 
 fn show_usage(err: bool) -> ! {
@@ -49,7 +47,7 @@ fn main() {
         b"--launch" => {
             #[derive(Eq, PartialEq)]
             enum TargetMode {
-                // Normal,
+                Normal,
                 // PreInject,
                 TaskForPid,
             }
@@ -64,7 +62,7 @@ fn main() {
                 //     TargetMode::PreInject,
                 //     args.next().unwrap_or_else(|| show_usage(true)),
                 // ),
-                _ => (TargetMode::TaskForPid, next),
+                _ => (TargetMode::Normal, next),
             };
 
             // Read args until --
@@ -86,14 +84,13 @@ fn main() {
             cmd.stdin(Stdio::inherit());
             let mut child: Option<Child> = None;
             let mut handle = match mode {
-                // ProcHandle::new is broken
-                // TargetMode::Normal => match ProcHandle::new(cmd) {
-                //     Ok(p) => p,
-                //     Err(e) => {
-                //         eprintln!("{}", e);
-                //         exit(2)
-                //     }
-                // },
+                TargetMode::Normal => match ProcHandle::new(cmd) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("{}", e);
+                        exit(2)
+                    }
+                },
                 // TargetMode::PreInject => match ProcHandle::new_pre_inject(cmd, &libs) {
                 //     Ok(p) => p,
                 //     Err(e) => {
@@ -113,7 +110,7 @@ fn main() {
                             exit(2)
                         }
                     };
-                    match ProcHandle::try_from(id as pid_t) {
+                    match ProcHandle::try_from(id as i32) {
                         Ok(h) => h,
                         Err(e) => {
                             eprintln!("{}", e);
@@ -133,9 +130,9 @@ fn main() {
             }
             // };
 
-            // if child.is_none() {
-            //     child = handle.take_proc_child();
-            // }
+            if child.is_none() {
+                child = handle.child().take();
+            }
             child
                 .unwrap()
                 .wait()
@@ -171,7 +168,7 @@ fn main() {
                 exit(3)
             }
 
-            let mut handle = match injector::ProcHandle::try_from(pid as pid_t) {
+            let mut handle = match injector::ProcHandle::try_from(pid as i32) {
                 Ok(h) => h,
                 Err(e) => {
                     eprintln!("{}", e);
@@ -209,7 +206,7 @@ fn main() {
                 .pid()
                 .as_u32();
 
-            let mut handle = match injector::ProcHandle::try_from(pid as pid_t) {
+            let mut handle = match injector::ProcHandle::try_from(pid as i32) {
                 Ok(h) => h,
                 Err(e) => {
                     eprintln!("{}", e);
