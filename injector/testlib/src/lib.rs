@@ -35,6 +35,11 @@ static FOO: extern "C" fn() = {
 };
 
 fn write_ascii_buf(buf: &[u8]) {
+    #[cfg(not(target_os = "windows"))]
+    unsafe {
+        write(STDOUT_FILENO, buf.as_ptr() as *const c_void, buf.len())
+    }
+    #[cfg(target_os = "windows")]
     unsafe {
         write(
             STDOUT_FILENO,

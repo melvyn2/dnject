@@ -1,3 +1,5 @@
+// TODO probably switch to thiserror
+
 #[derive(Debug, Clone)]
 pub enum InjectorErrorKind {
     /// The injector crate or injected module do not support the architecture of the target process.

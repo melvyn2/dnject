@@ -3,6 +3,10 @@
 pkgs.mkShell {
   nativeBuildInputs = with pkgs.buildPackages.buildPackages; [
     wineWowPackages.stable
+    cmake
+    qt5.qtbase.dev
+    qt5.qttools.dev
+    libglvnd.dev
     # gcc
   ];
 
@@ -15,7 +19,5 @@ pkgs.mkShell {
     export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS="-C link-args=''$(echo $NIX_LDFLAGS | tr ' ' '\n' | grep -- '^-L' | tr '\n' ' ')"
     export NIX_LDFLAGS=
   '';
-
-  CARGO_BUILD_TARGET = "x86_64-pc-windows-gnu";
 }
 

@@ -3,3 +3,9 @@ bindeps = true
 
 #[target.'cfg(target_os = "macos")']
 #runner = ".cargo/macos_cs_runner.sh"
+
+[target.'cfg(target_os = "windows")']
+runner = "wine64"
+
+[build]
+target = "x86_64-pc-windows-gnu"

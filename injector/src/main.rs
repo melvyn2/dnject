@@ -4,7 +4,7 @@ use injector::ProcHandle;
 use std::path::PathBuf;
 use std::process::{exit, Child, Command, Stdio};
 
-use sysinfo::{PidExt, ProcessExt, ProcessRefreshKind, RefreshKind, SystemExt};
+use sysinfo::{ProcessRefreshKind, RefreshKind};
 
 fn show_usage(err: bool) -> ! {
     let exe_name = std::env::args()
@@ -67,7 +67,9 @@ fn main() {
 
             // Read args until --
             let mut proc_args = vec![];
-            while let Some(arg) = args.next() && arg != "--" {
+            while let Some(arg) = args.next()
+                && arg != "--"
+            {
                 proc_args.push(arg);
             }
 

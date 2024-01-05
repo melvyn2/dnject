@@ -1,10 +1,8 @@
 //! A cross-platform API to inject dynamic code objects into other processes.
 //! All functionality resides in the [ProcHandle] struct
 
-#![feature(core_intrinsics)]
 #![feature(io_error_more)]
 #![feature(optimize_attribute)]
-#![feature(pointer_byte_offsets)]
 #![feature(unchecked_math)]
 #![feature(allocator_api)]
 #![feature(ptr_as_uninit)]
@@ -38,7 +36,7 @@ mod nt;
 pub use nt::ProcHandle;
 
 // Ensure consistent API
-// PIDs on all platforms are c_int or i32, so ensure they have the correct trait
+// PIDs on all platforms are c_int or i32, so ensure they have the correct TryFrom trait from PIDs
 trait InjectorTrait: Sized + TryFrom<i32> {
     fn new(cmd: Command) -> Result<Self, InjectorError>;
 
@@ -55,6 +53,8 @@ trait InjectorTrait: Sized + TryFrom<i32> {
     fn kill(self) -> Result<(), InjectorError>;
 }
 
+// Force API to be implemented (if unimplemented, the trait definition is called, and recurses)
+#[deny(unconditional_recursion)]
 impl InjectorTrait for ProcHandle {
     fn new(cmd: Command) -> Result<Self, InjectorError> {
         Self::new(cmd)

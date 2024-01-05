@@ -17,7 +17,7 @@ test_broken = [ "spawn-task-port" ]  # Used to test broken methods
 env_logger = { version = "0.10", optional = true }
 libc = "0.2"
 log = "0.4"
-sysinfo = { version = "0.29", default-features = false }
+sysinfo = { version = "0.30", default-features = false }
 
 [dev-dependencies]
 testlib = { path = "./testlib", artifact = ["cdylib"] }
@@ -34,7 +34,6 @@ mach_util = { path = "../mach_util" }
 # TODO check if custom source still required
 apple-codesign = { git = "https://github.com/melvyn2/apple-platform-rs.git", default-features = false }
 macos_portfetch = { path = "../macos_portfetch" }
-
 
 [target.'cfg(target_os = "windows")'.dependencies]
 dll-syringe = "0.15"
